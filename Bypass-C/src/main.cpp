@@ -1,120 +1,74 @@
 #include <windows.h>
 #include <iostream>
 #include <shellapi.h>
-#include <vector>
-#include <map>
-#include <mutex>
+#include <d3d11.h>
 #include "../include/gui/Render.h"
 #include "../include/gui/Menu.h"
 
-// --- INICIALIZACIÓN DE TODAS LAS VARIABLES ESTÁTICAS DE MENU ---
-// Nota: Solo usamos tipos estándar de C++ aquí para evitar el error de contexto de ImGui al arrancar.
-namespace Gui {
-    // Estado y Lenguaje
-    AppState Menu::currentState = AppState::SplashScreen;
-    std::string Menu::currentLang = "EN";
-    std::map<std::string, std::map<std::string, std::string>> Menu::languages;
-
-    // Splash Screen
-    float Menu::splashProgress = 0.0f;
-    int Menu::splashStep = 0;
-    float Menu::pulseDirection = 1.0f;
-    float Menu::glowWidth = 0.0f;
-
-    // Alertas
-    bool Menu::showAlert = false;
-    bool Menu::alertIsError = false;
-    std::string Menu::alertTitle = "";
-    std::string Menu::alertMessage = "";
-
-    // Login
-    char Menu::userBuffer[256] = "";
-    char Menu::passBuffer[256] = "";
-    char Menu::keyBuffer[256] = "";
-    std::string Menu::loginStatus = "SYSTEM IDLE";
-    bool Menu::isLoginError = false;
-    bool Menu::isAdmin = false;
-
-    // Redeem
-    char Menu::redeemKey[256] = "";
-    char Menu::redeemUser[256] = "";
-    char Menu::redeemPass[256] = "";
-    char Menu::redeemConf[256] = "";
-    std::string Menu::redeemStatus = "";
-
-    // Main / Settings
-    bool Menu::showSettings = false;
-    bool Menu::deepScanEnabled = false;
-    float Menu::matrixDrops[50] = { 0 };
-    bool Menu::isBindingHotkey = false;
-    int Gui::Menu::bypassHotkey = 0;
-
-    // Admin Center
-    std::vector<UserNode> Menu::cachedUsers;
-    int Menu::keyTierIndex = 1;
-    int Menu::keyAmount = 1;
-    std::string Menu::generatedKeysOutput = "";
-    bool Menu::showHwidResetModal = false;
-    char Menu::hwidResetTarget[256] = "";
-    bool Menu::showDeleteModal = false;
-    std::string Menu::userToDelete = "";
-
-    // Bypass / Ghost Protocol
-    std::wstring Menu::targetPath = L"";
-    std::vector<std::string> Menu::consoleLogs;
-    std::mutex Menu::logMutex; 
-    bool Menu::isWiping = false;
-    bool Menu::showKamikazeModal = false;
-}
-
-// Función para solicitar privilegios de Administrador (UAC)
+// --- FUNCIÓN DE ELEVACIÓN DE PRIVILEGIOS (UAC) ---
 bool RequestAdminPrivileges() {
-    BOOL isAdmin = FALSE;
+    BOOL bIsElevated = FALSE;
     HANDLE hToken = NULL;
     if (OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &hToken)) {
         TOKEN_ELEVATION elevation;
-        DWORD cbSize = sizeof(TOKEN_ELEVATION);
-        if (GetTokenInformation(hToken, TokenElevation, &elevation, sizeof(elevation), &cbSize)) {
-            isAdmin = elevation.TokenIsElevated;
+        DWORD dwSize;
+        if (GetTokenInformation(hToken, TokenElevation, &elevation, sizeof(elevation), &dwSize)) {
+            bIsElevated = elevation.TokenIsElevated;
         }
     }
     if (hToken) CloseHandle(hToken);
 
-    if (!isAdmin) {
+    if (!bIsElevated) {
         wchar_t szPath[MAX_PATH];
-        if (GetModuleFileNameW(NULL, szPath, ARRAYSIZE(szPath))) {
+        if (GetModuleFileNameW(NULL, szPath, MAX_PATH)) {
             SHELLEXECUTEINFOW sei = { sizeof(sei) };
             sei.cbSize = sizeof(sei);
-            sei.lpVerb = L"runas"; 
+            sei.lpVerb = L"runas";
             sei.lpFile = szPath;
             sei.hwnd = NULL;
             sei.nShow = SW_NORMAL;
             sei.fMask = SEE_MASK_NOCLOSEPROCESS;
-            if (!ShellExecuteExW(&sei)) return false;
-            exit(0); 
+
+            if (ShellExecuteExW(&sei)) return false; 
         }
     }
-    return true;
+    return bIsElevated != 0;
 }
 
-// PUNTO DE ENTRADA PRINCIPAL
+// --- PUNTO DE ENTRADA PRINCIPAL ---
 int APIENTRY WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR pCmdLine, int nCmdShow) {
-    // 1. Auto-Elevación: Necesario para que el Cleaner acceda a registros protegidos
+    
+    // 1. Elevación (Indispensable para el motor de bypass)
     if (!RequestAdminPrivileges()) return 0;
 
-    // 2. Pre-Arranque: Soporte para monitores de alta resolución
+    // 2. Soporte DPI para que el menú no se vea borroso
     SetProcessDPIAware();
 
-    // 3. Inicializar el motor gráfico (DirectX 11 + ImGui)
-    // El orden interno de Initialize ahora protege el contexto de ImGui
+    // 3. Inicializar el motor gráfico
     Gui::Render renderEngine;
     if (!renderEngine.Initialize(L"Scanneler - Ghost Protocol")) {
-        MessageBoxA(NULL, "Fallo critico al iniciar el motor grafico.", "Scanneler Error", MB_ICONERROR);
+        MessageBoxA(NULL, "Error critico: El dispositivo DirectX 11 no pudo iniciarse.", "Scanneler System", MB_ICONERROR);
         return -1;
     }
 
-    // 4. Ejecutar bucle de renderizado
-    renderEngine.Run();
+    // 4. CARGA SEGURA DE RECURSOS
+    // Obtenemos el puntero del dispositivo DESPUÉS de Initialize
+    ID3D11Device* device = renderEngine.GetDevice(); 
+    
+    if (device != nullptr) {
+        // Intentamos cargar la imagen. 
+        // Si la función LoadLogoTexture está bien blindada (con el fallback que te pasé),
+        // no importa si el archivo no existe; el programa NO crasheará.
+        Gui::Menu::LoadLogoTexture(device, "assets/Scanneler.png");
+    }
+
+    // 5. Bucle de Renderizado
+    // Si llegamos aquí, el programa debería mantenerse abierto
+    try {
+        renderEngine.Run();
+    } catch (...) {
+        OutputDebugStringA("[!] Error fatal durante el ciclo de renderizado.\n");
+    }
 
     return 0;
 }

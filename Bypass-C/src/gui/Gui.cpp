@@ -1,66 +1,247 @@
 #include "../../include/gui/Menu.h"
 #include "../../include/auth/ApiClient.h"
-#include "../../include/core/Cleaner.h" // Asumiendo que esta es la ruta de tu Cleaner
+#include "../../include/core/Cleaner.h"
 #include <windows.h>
 #include <chrono>
 #include <thread>
+#include <atomic>
+#include <TlHelp32.h>
+#include <mutex>
+#include "../../include/auth/ApiClient.h"
 #include <random>
 #include <commdlg.h>
 #include <nlohmann/json.hpp>
+#include <algorithm>
+#define STB_IMAGE_IMPLEMENTATION 
+#include "../../include/stb_image.h"
+#include "../../include/core/Payload.h"
+#include "../../include/core/ManualMapper.h"
+#pragma comment(lib, "d3d11.lib")
+
+// ==========================================================
+// FIX DEFINITIVO PARA MATEMÁTICAS CSS (ELITE ENGINE)
+// ==========================================================
+
+// --- OPERADORES MATEMÁTICOS PARA UI ---
+static inline ImVec2 operator+(const ImVec2& lhs, const ImVec2& rhs) { return ImVec2(lhs.x + rhs.x, lhs.y + rhs.y); }
+static inline ImVec2 operator-(const ImVec2& lhs, const ImVec2& rhs) { return ImVec2(lhs.x - rhs.x, lhs.y - rhs.y); }
+
+// Multiplicación de colores (Necesaria para la línea 677 del Glow)
+static inline ImVec4 operator*(const ImVec4& lhs, const ImVec4& rhs) { 
+    return ImVec4(lhs.x * rhs.x, lhs.y * rhs.y, lhs.z * rhs.z, lhs.w * rhs.w); 
+}
+static inline ImVec4 operator*(const ImVec4& lhs, float rhs) { 
+    return ImVec4(lhs.x * rhs, lhs.y * rhs, lhs.z * rhs, lhs.w * rhs); 
+}
+static inline ImVec4 operator+(const ImVec4& lhs, const ImVec4& rhs) { 
+    return ImVec4(lhs.x + rhs.x, lhs.y + rhs.y, lhs.z + rhs.z, lhs.w + rhs.w); 
+}
+static inline ImVec4 operator-(const ImVec4& lhs, const ImVec4& rhs) { 
+    return ImVec4(lhs.x - rhs.x, lhs.y - rhs.y, lhs.z - rhs.z, lhs.w - rhs.w); 
+}
+
+// Función Lerp genérica corregida para transiciones suaves tipo CSS
+template<typename T> 
+static inline T ImLerp(T a, T b, float t) { 
+    return a + (b - a) * t; 
+}
+
+#ifndef ImClamp
+#define ImClamp(V, MN, MX) ((V) < (MN) ? (MN) : (V) > (MX) ? (MX) : (V))
+#endif
+
+
 
 namespace Gui {
+
+    // ==========================================================
+    // DEFINICIÓN DE VARIABLES ESTÁTICAS (OBLIGATORIO PARA LINKER)
+    // ==========================================================
+
+    // Instancia y Configuración Global
+    Menu* Menu::_instance = nullptr;
+    AppState Menu::currentState = AppState::SplashScreen;
+    std::string Menu::currentLang = "EN";
+    std::map<std::string, std::map<std::string, std::string>> Menu::languages;
+
+    // --- RECURSOS VISUALES (RESUELVE LNK2019) ---
+    ID3D11ShaderResourceView* Menu::logoTexture = nullptr;
+
+    // Animaciones y Efectos Visuales
+    float Menu::matrixDrops[70] = { 0 }; 
+    float Menu::scanlineTimer = 0.0f;
+    float Menu::btnHoverLerp = 0.0f;
+    float Menu::glowWidth = 0.0f;
+    float Menu::pulseDirection = 1.0f;
+    float Menu::splashProgress = 0.0f;
+    int Menu::splashStep = 0;
+    std::map<std::string, float> Menu::inputAnims;
+
+    // Alertas
+    bool Menu::showAlert = false;
+    bool Menu::alertIsError = false;
+    std::string Menu::alertTitle = "";
+    std::string Menu::alertMessage = "";
+
+    // Sistema de Autenticación
+    char Menu::userBuffer[256] = "";
+    char Menu::passBuffer[256] = "";
+    char Menu::keyBuffer[256] = "";
+    std::string Menu::loginStatus = "";
+    bool Menu::isLoginError = false;
+    bool Menu::isAdmin = false;
+    bool Menu::isConnecting = false;
+
+    // Registro y Canje (Redeem)
+    char Menu::redeemKey[256] = "";
+    char Menu::redeemUser[256] = "";
+    char Menu::redeemPass[256] = "";
+    char Menu::redeemConf[256] = "";
+    std::string Menu::redeemStatus = "";
+
+    // Configuración de Sistema
+    bool Menu::showSettings = false;
+    bool Menu::deepScanEnabled = false;
+    bool Menu::isBindingHotkey = false;
+    int Menu::bypassHotkey = 0;
+
+    // Ghost Protocol (Bypass)
+    std::wstring Menu::targetPath = L"";
+    std::vector<std::string> Menu::consoleLogs;
+    std::mutex Menu::logMutex;
+    bool Menu::isWiping = false;
+    bool Menu::showKamikazeModal = false;
+
+    // Command Center (Admin)
+    std::vector<UserNode> Menu::cachedUsers;
+    int Menu::keyTierIndex = 0;
+    int Menu::keyAmount = 1;
+    std::string Menu::generatedKeysOutput = "";
+    bool Menu::showHwidResetModal = false;
+    char Menu::hwidResetTarget[256] = "";
+    bool Menu::showDeleteModal = false;
+    std::string Menu::userToDelete = "";
+
+// ==========================================================
+// IMPLEMENTACIÓN DE CARGA DE LOGO (VERSIÓN ULTRA-SEGURA)
+// ==========================================================
+bool Menu::LoadLogoTexture(ID3D11Device* device, const char* filename) {
+    // 1. Limpieza preventiva y validación de driver
+    Menu::logoTexture = nullptr; 
+    if (!device) return false;
+
+    int width, height, channels;
+    
+    // 2. Intento de carga (Ruta relativa)
+    unsigned char* data = stbi_load(filename, &width, &height, &channels, 4);
+    
+    // 3. SEGUNDO INTENTO (Ruta absoluta de emergencia si la relativa falla)
+    if (data == NULL) {
+        const char* backupPath = "C:\\Users\\Nahele\\Desktop\\Bypass-C-main\\Bypass-C\\assets\\Scanneler.png";
+        data = stbi_load(backupPath, &width, &height, &channels, 4);
+    }
+
+    // --- SALIDA SEGURA SI AMBOS FALLAN ---
+    if (data == NULL) {
+        // No cerramos el programa, solo avisamos al sistema que no hay textura
+        OutputDebugStringA("[!] LOGO_ERROR: Archivo Scanneler.png no encontrado. Usando fallback.\n");
+        return false; 
+    }
+
+    // 4. Configuración de la textura
+    D3D11_TEXTURE2D_DESC desc;
+    ZeroMemory(&desc, sizeof(desc));
+    desc.Width = width;
+    desc.Height = height;
+    desc.MipLevels = 1;
+    desc.ArraySize = 1;
+    desc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+    desc.SampleDesc.Count = 1;
+    desc.Usage = D3D11_USAGE_DEFAULT;
+    desc.BindFlags = D3D11_BIND_SHADER_RESOURCE;
+
+    ID3D11Texture2D* pTexture = nullptr;
+    D3D11_SUBRESOURCE_DATA subResource;
+    subResource.pSysMem = data;
+    subResource.SysMemPitch = width * 4;
+    subResource.SysMemSlicePitch = 0;
+
+    // 5. Creación física en GPU con manejo de errores HRESULT
+    HRESULT hr = device->CreateTexture2D(&desc, &subResource, &pTexture);
+    
+    if (SUCCEEDED(hr) && pTexture) {
+        D3D11_SHADER_RESOURCE_VIEW_DESC srvDesc;
+        ZeroMemory(&srvDesc, sizeof(srvDesc));
+        srvDesc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+        srvDesc.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D;
+        srvDesc.Texture2D.MipLevels = 1;
+
+        hr = device->CreateShaderResourceView(pTexture, &srvDesc, &Menu::logoTexture);
+        
+        // Liberamos el recurso intermedio
+        pTexture->Release();
+    } else {
+        OutputDebugStringA("[!] D3D11_ERROR: Fallo al crear la textura en la GPU.\n");
+    }
+
+    // 6. Limpieza de memoria RAM (ya está en VRAM)
+    stbi_image_free(data);
+    
+    return SUCCEEDED(hr);
+}
 
     // ==========================================================
     // CONSTRUCTOR
     // ==========================================================
     Menu::Menu() 
     {
-        // Constructor vacío para evitar el crash del contexto de ImGui
+        _instance = this;
     }
 
     // ==========================================================
     // SISTEMA DE LENGUAJES (I18N)
     // ==========================================================
     void Menu::SetupLanguages() 
-    {
-        // --- ESPAÑOL ---
-        languages["ES"] = {
-            {"launch", "INICIAR SISTEMA CORE"}, 
-            {"admin_btn", "🛡️ PANEL ADMIN"},
-            {"settings", "⚙️ AJUSTES"}, 
-            {"nodes", "👤 NÓDULOS ACTIVOS"},
-            {"mint", "🔑 GENERAR LICENCIAS"}, 
-            {"target", "SELECCIONAR ARCHIVO"},
-            {"execute", "EJECUTAR BYPASS NEURAL"}, 
-            {"lang_title", "CONFIGURACIÓN"},
-            {"back", "← VOLVER"}, 
-            {"success_reg", "CUENTA ACTIVADA CON ÉXITO"},
-            {"refresh", "RECARGAR"}, 
-            {"unlock", "DESBLOQUEAR HWID"},
-            {"tier", "RANGO"}, 
-            {"amount", "CANTIDAD"}, 
-            {"mint_btn", "MINTEAR LLAVES"}
-        };
+{
+    // Usamos una sintaxis de inicialización limpia
+    languages["ES"] = {
+        {"launch", "INICIAR SISTEMA CORE"}, 
+        {"admin_btn", "🛡️ PANEL ADMIN"},
+        {"settings", "⚙️ AJUSTES"}, 
+        {"nodes", "👤 NÓDULOS ACTIVOS"},
+        {"mint", "🔑 GENERAR LICENCIAS"}, 
+        {"target", "OBJETIVO BINARIO"},
+        {"execute", "EJECUTAR BYPASS NEURAL"}, 
+        {"lang_title", "CONFIGURACIÓN"},
+        {"back", "← VOLVER"}, 
+        {"success_reg", "CUENTA ACTIVADA"},
+        {"refresh", "RECARGAR"}, 
+        {"unlock", "DESBLOQUEAR HWID"},
+        {"tier", "RANGO"}, 
+        {"amount", "CANTIDAD"}, 
+        {"mint_btn", "MINTEAR LLAVES"},
+        {"status_idle", "SISTEMA EN ESPERA"}
+    };
 
-        // --- INGLÉS ---
-        languages["EN"] = {
-            {"launch", "LAUNCH CORE SYSTEM"}, 
-            {"admin_btn", "🛡️ ADMIN PANEL"},
-            {"settings", "⚙️ SETTINGS"}, 
-            {"nodes", "👤 ACTIVE NODES"},
-            {"mint", "🔑 LICENSE MINT"}, 
-            {"target", "SELECT TARGET BINARY"},
-            {"execute", "EXECUTE NEURAL BYPASS"}, 
-            {"lang_title", "SETTINGS"},
-            {"back", "← BACK"}, 
-            {"success_reg", "ACCOUNT ACTIVATED SUCCESSFULLY"},
-            {"refresh", "REFRESH"}, 
-            {"unlock", "UNLOCK HWID"},
-            {"tier", "TIER"}, 
-            {"amount", "AMOUNT"}, 
-            {"mint_btn", "MINT KEYS"}
-        };
-    }
+    languages["EN"] = {
+        {"launch", "LAUNCH CORE SYSTEM"}, 
+        {"admin_btn", "🛡️ ADMIN PANEL"},
+        {"settings", "⚙️ SETTINGS"}, 
+        {"nodes", "👤 ACTIVE NODES"},
+        {"mint", "🔑 LICENSE MINT"}, 
+        {"target", "TARGET BINARY"},
+        {"execute", "EXECUTE NEURAL BYPASS"}, 
+        {"lang_title", "SETTINGS"},
+        {"back", "← BACK"}, 
+        {"success_reg", "ACCOUNT ACTIVATED"},
+        {"refresh", "REFRESH"}, 
+        {"unlock", "UNLOCK HWID"},
+        {"tier", "TIER"}, 
+        {"amount", "AMOUNT"}, 
+        {"mint_btn", "MINT KEYS"},
+        {"status_idle", "SYSTEM IDLE"}
+    };
+}
 
     std::string Menu::GetText(const std::string& key) 
     {
@@ -74,1486 +255,1181 @@ namespace Gui {
         return key; // Devuelve la llave original si no encuentra traducción
     }
 
-    // ==========================================================
-    // ESTILOS VISUALES (CYBER NEON THEME)
-    // ==========================================================
 void Menu::ApplyCyberNeonTheme() {
     ImGuiStyle& style = ImGui::GetStyle();
     ImVec4* colors = style.Colors;
 
-    // Fondos ultra oscuros estilo "Void" con un toque de azul medianoche
-    colors[ImGuiCol_WindowBg]       = ImVec4(0.03f, 0.03f, 0.05f, 0.98f); 
-    colors[ImGuiCol_ChildBg]        = ImVec4(0.06f, 0.06f, 0.09f, 1.00f);
-    colors[ImGuiCol_PopupBg]        = ImVec4(0.05f, 0.05f, 0.07f, 0.98f);
-    
-    // Bordes sutiles y futuristas (Cian oscuro)
-    colors[ImGuiCol_Border]         = ImVec4(0.15f, 0.20f, 0.30f, 1.00f);
-    colors[ImGuiCol_BorderShadow]   = ImVec4(0.00f, 0.00f, 0.00f, 0.20f);
-
-    // Inputs de texto y frames (Oscuros, se iluminan al interactuar)
-    colors[ImGuiCol_FrameBg]        = ImVec4(0.08f, 0.08f, 0.12f, 1.00f);
-    colors[ImGuiCol_FrameBgHovered] = ImVec4(0.12f, 0.12f, 0.18f, 1.00f);
-    colors[ImGuiCol_FrameBgActive]  = ImVec4(0.15f, 0.15f, 0.22f, 1.00f);
-
-    // Botones dinámicos (Violeta neón transicionando a Cian)
-    colors[ImGuiCol_Button]         = ImVec4(0.40f, 0.20f, 0.80f, 0.80f); // Violeta base
-    colors[ImGuiCol_ButtonHovered]  = ImVec4(0.50f, 0.30f, 0.95f, 1.00f); // Se ilumina al pasar el mouse
-    colors[ImGuiCol_ButtonActive]   = ImVec4(0.20f, 0.80f, 0.90f, 1.00f); // Estalla en cian al hacer clic
-
-    // Textos limpios y de alto contraste
-    colors[ImGuiCol_Text]           = ImVec4(0.90f, 0.90f, 0.95f, 1.00f);
-    colors[ImGuiCol_TextDisabled]   = ImVec4(0.40f, 0.40f, 0.50f, 1.00f);
-
-    // Barras y pestañas
-    colors[ImGuiCol_Tab]            = ImVec4(0.08f, 0.08f, 0.12f, 1.00f);
-    colors[ImGuiCol_TabHovered]     = ImVec4(0.40f, 0.20f, 0.80f, 0.80f);
-    colors[ImGuiCol_TabActive]      = ImVec4(0.50f, 0.30f, 0.95f, 1.00f);
-    
-    colors[ImGuiCol_Header]         = ImVec4(0.40f, 0.20f, 0.80f, 0.40f);
-    colors[ImGuiCol_HeaderHovered]  = ImVec4(0.50f, 0.30f, 0.95f, 0.80f);
-    colors[ImGuiCol_HeaderActive]   = ImVec4(0.20f, 0.80f, 0.90f, 1.00f);
-
-    // Geometría "Cyber 2026" (Redondeos suaves y elegantes)
-    style.WindowRounding    = 12.0f; // Ventanas más redondas
-    style.ChildRounding     = 8.0f;  // Paneles internos sutiles
-    style.FrameRounding     = 6.0f;  // Botones e inputs curvos
-    style.PopupRounding     = 8.0f;
+    // --- GEOMETRÍA PREMIUM ---
+    style.WindowRounding    = 12.0f; 
+    style.ChildRounding     = 10.0f;
+    style.FrameRounding     = 6.0f;  
+    style.PopupRounding     = 10.0f;
     style.ScrollbarRounding = 12.0f;
-    style.WindowBorderSize  = 1.0f;  // Borde ultra fino
+    style.GrabRounding      = 6.0f;
+
+    style.WindowBorderSize  = 1.0f;
     style.ChildBorderSize   = 1.0f;
-    style.FrameBorderSize   = 0.0f;  // Inputs sin borde rígido, se funden con el fondo
-    
-    // Espaciado para que respire la interfaz
+    style.FrameBorderSize   = 1.0f; 
+
+    style.WindowPadding     = ImVec2(20, 20);
+    style.FramePadding      = ImVec2(12, 8); 
     style.ItemSpacing       = ImVec2(10, 12);
-    style.FramePadding      = ImVec2(15, 10); // Botones más "gorditos" y clickeables
+    
+    // --- PALETA ELITE (VIOLETA & OBSIDIANA) ---
+    
+    // Window Bg: Un negro azulado con opacidad alta pero no total
+    colors[ImGuiCol_WindowBg]         = ImVec4(0.05f, 0.05f, 0.07f, 0.94f); 
+    colors[ImGuiCol_ChildBg]          = ImVec4(0.00f, 0.00f, 0.00f, 0.00f); // Transparente para usar el de abajo
+    colors[ImGuiCol_PopupBg]          = ImVec4(0.08f, 0.08f, 0.10f, 0.98f);
+    
+    // El Borde: El violeta "Scanneler" (Brillo neón sutil)
+    colors[ImGuiCol_Border]           = ImVec4(0.55f, 0.36f, 0.96f, 0.35f); 
+    
+    // Botones (Estilo Glass): Opacidad baja para el botón, alta para el hover
+    colors[ImGuiCol_Button]           = ImVec4(0.55f, 0.36f, 0.96f, 0.20f); 
+    colors[ImGuiCol_ButtonHovered]    = ImVec4(0.55f, 0.36f, 0.96f, 0.50f);
+    colors[ImGuiCol_ButtonActive]     = ImVec4(0.55f, 0.36f, 0.96f, 0.80f);
+
+    // Inputs
+    colors[ImGuiCol_FrameBg]          = ImVec4(1.00f, 1.00f, 1.00f, 0.03f); // Muy sutil
+    colors[ImGuiCol_FrameBgHovered]   = ImVec4(1.00f, 1.00f, 1.00f, 0.08f);
+    colors[ImGuiCol_FrameBgActive]    = ImVec4(0.55f, 0.36f, 0.96f, 0.25f);
 }
 
-// ==========================================================
-    // RENDERIZADO DE FONDOS (CYBER 2026 AESTHETIC)
-    // ==========================================================
-    void Menu::DrawCyberGrid(ImDrawList* drawList, ImVec2 pos, ImVec2 size) 
+void Menu::DrawCyberGrid(ImDrawList* drawList, ImVec2 pos, ImVec2 size) 
+{
+    // --- CONFIGURACIÓN DE COLORES ---
+    // Usamos el violeta Scanneler pero con opacidad dinámica
+    ImU32 lineColor      = IM_COL32(139, 92, 246, 35); // Violeta base sutil
+    ImU32 thickLineColor = IM_COL32(139, 92, 246, 70); // Ejes con más presencia
+    
+    float step = 60.0f; // Espaciado optimizado para no saturar la vista
+    
+    // Animación de flujo constante (Scroll infinito)
+    static float offset = 0.0f;
+    offset += ImGui::GetIO().DeltaTime * 15.0f; 
+    if (offset > step) offset -= step;
+
+    // --- RENDERIZADO DE LÍNEAS VERTICALES ---
+    for (float x = fmodf(size.x / 2.0f, step) + offset - step; x < size.x; x += step) 
     {
-        // Colores más sutiles para no distraer, estilo "Blueprint" tecnológico
-        ImU32 lineColor = IM_COL32(40, 45, 65, 80);        // Líneas finas
-        ImU32 thickLineColor = IM_COL32(80, 90, 120, 120); // Líneas maestras
-
-        float step = 45.0f;
+        int gridIdx = (int)((x - offset) / step);
+        bool isThick = (gridIdx % 4 == 0);
         
-        // Animación de desplazamiento infinito (Parallax suave)
-        static float offset = 0.0f;
-        offset += ImGui::GetIO().DeltaTime * 15.0f; 
-        if (offset > step) offset -= step;
-
-        // Lineas verticales con patrón de repetición (cada 4 líneas es más gruesa)
-        for (float x = fmodf(size.x / 2.0f, step) + offset - step; x < size.x; x += step) 
-        {
-            bool isThick = (int)(x / step) % 4 == 0;
-            drawList->AddLine(ImVec2(pos.x + x, pos.y), ImVec2(pos.x + x, pos.y + size.y), 
-                              isThick ? thickLineColor : lineColor, isThick ? 2.0f : 1.0f);
-        }
+        // Dibujamos la línea con un efecto de degradado de altura (opcional pero elegante)
+        drawList->AddLine(
+            ImVec2(pos.x + x, pos.y), 
+            ImVec2(pos.x + x, pos.y + size.y), 
+            isThick ? thickLineColor : lineColor, 
+            1.2f
+        );
+    }
+    
+    // --- RENDERIZADO DE LÍNEAS HORIZONTALES ---
+    for (float y = fmodf(size.y / 2.0f, step) + offset - step; y < size.y; y += step) 
+    {
+        int gridIdx = (int)((y - offset) / step);
+        bool isThick = (gridIdx % 4 == 0);
         
-        // Lineas horizontales
-        for (float y = fmodf(size.y / 2.0f, step) + offset - step; y < size.y; y += step) 
-        {
-            bool isThick = (int)(y / step) % 4 == 0;
-            drawList->AddLine(ImVec2(pos.x, pos.y + y), ImVec2(pos.x + size.x, pos.y + y), 
-                              isThick ? thickLineColor : lineColor, isThick ? 2.0f : 1.0f);
-        }
+        drawList->AddLine(
+            ImVec2(pos.x, pos.y + y), 
+            ImVec2(pos.x + size.x, pos.y + y), 
+            isThick ? thickLineColor : lineColor, 
+            1.2f
+        );
     }
 
-    void Menu::DrawCentralGlow(ImDrawList* drawList, ImVec2 center) 
-    {
-        // Animación de respiración suave basada en el tiempo (más fluido que sumar/restar)
-        static float time = 0.0f;
-        time += ImGui::GetIO().DeltaTime * 2.0f;
-        float pulse = (sin(time) * 0.5f) + 0.5f; // Rango de 0.0 a 1.0
-
-        // Radios dinámicos
-        float baseRadius = 160.0f + (pulse * 15.0f);
-
-        // Capas para simular luz volumétrica (Bloom)
-        ImU32 coreColor  = IM_COL32(139, 92, 246, 40 + (int)(20 * pulse));  // Centro Violeta intenso
-        ImU32 midColor   = IM_COL32(0, 255, 255, 20 + (int)(15 * pulse));   // Borde Cian
-        ImU32 outerColor = IM_COL32(139, 92, 246, 5);                       // Corona ultra suave
-
-        drawList->AddCircleFilled(center, baseRadius * 1.5f, outerColor, 64);
-        drawList->AddCircleFilled(center, baseRadius * 1.1f, midColor, 64);
-        drawList->AddCircleFilled(center, baseRadius * 0.6f, coreColor, 64);
-
-        // Anillos tecnológicos de contorno para darle un toque UI/HUD
-        drawList->AddCircle(center, baseRadius * 1.2f, IM_COL32(0, 255, 255, 100), 64, 1.5f);
-        drawList->AddCircle(center, baseRadius * 0.85f, IM_COL32(139, 92, 246, 180), 64, 1.0f);
+    // --- CAPA DE POST-PROCESADO: VIGNETTE & RADIAL GLOW ---
+    // 1. Sombra circular periférica (CSS Radial Gradient simulation)
+    ImVec2 center = ImVec2(pos.x + size.x * 0.5f, pos.y + size.y * 0.5f);
+    
+    // Dibujamos capas de círculos huecos con opacidad creciente hacia afuera
+    for (int i = 0; i < 12; i++) {
+        float radius = (size.x > size.y ? size.x : size.y) * (0.4f + i * 0.05f);
+        drawList->AddCircle(center, radius, IM_COL32(0, 0, 0, i * 15), 100, 40.0f);
     }
 
-    void Menu::DrawMatrixBackground(ImDrawList* drawList, ImVec2 pos, ImVec2 size) 
-    {
-        // Usamos HEX Code en lugar de símbolos random para un look más "Reverse Engineering"
-        const char chars[] = "01A2B3C4D5E6F789"; 
-        int cols = 60;
-        float colWidth = size.x / cols;
-        float speed = ImGui::GetIO().DeltaTime * 350.0f;
-        
-        for (int i = 0; i < cols; i++) 
-        {
-            // Caída asíncrona: unas columnas van más rápido que otras
-            matrixDrops[i] += speed + (i % 5) * 40.0f; 
-            if (matrixDrops[i] > size.y + 50.0f) 
-            {
-                matrixDrops[i] = -20.0f; // Reinicia arriba suavemente
-            }
+    // 2. Viñeta en las esquinas (Multicolor)
+    drawList->AddRectFilledMultiColor(pos, ImVec2(pos.x + size.x, pos.y + size.y),
+        IM_COL32(5, 5, 10, 200), IM_COL32(5, 5, 10, 200), // Esquinas superiores
+        IM_COL32(5, 5, 10, 240), IM_COL32(5, 5, 10, 240)); // Esquinas inferiores (más oscuras)
+}
 
-            char c = chars[rand() % (sizeof(chars) - 1)];
-            std::string s(1, c);
-            
-            // Colores Cyberpunk: Cian brillante cayendo con estela violeta
-            ImU32 headColor  = IM_COL32(0, 255, 255, 220);  // Cabeza Cian
-            ImU32 trailColor = IM_COL32(139, 92, 246, 120); // Cuerpo Violeta
-            ImU32 fadeColor  = IM_COL32(139, 92, 246, 30);  // Cola casi invisible
-            
-            // Dibujamos el rastro (Efecto de lluvia con degradado)
-            drawList->AddText(ImVec2(pos.x + (i * colWidth), pos.y + matrixDrops[i]), headColor, s.c_str());
-            drawList->AddText(ImVec2(pos.x + (i * colWidth), pos.y + matrixDrops[i] - 15), trailColor, "X");
-            drawList->AddText(ImVec2(pos.x + (i * colWidth), pos.y + matrixDrops[i] - 30), fadeColor, "1");
-        }
-    }
-
-// ==========================================================
-    // UTILIDADES GENERALES
-    // ==========================================================
-    std::string Menu::GetKeyName(int vkCode) 
-    {
-        if (vkCode == 0) return "NONE";
-        
-        UINT scanCode = MapVirtualKeyA(vkCode, MAPVK_VK_TO_VSC);
-        char keyName[128];
-        
-        if (GetKeyNameTextA(scanCode << 16, keyName, sizeof(keyName))) 
-        {
-            return std::string(keyName);
-        }
-        
-        return "UNKNOWN";
-    }
-
-    void Menu::ShowAlert(const std::string& title, const std::string& msg, bool isError) 
-    {
-        alertTitle = title;
-        alertMessage = msg;
-        alertIsError = isError;
-        showAlert = true;
-    }
-
-    void Menu::DrawCyberAlert() 
+void Menu::DrawCyberAlert() 
     {
         if (!showAlert) return;
 
-        // Oscurecer el fondo de toda la aplicación detrás del modal para darle enfoque
-        ImGui::PushStyleColor(ImGuiCol_ModalWindowDimBg, ImVec4(0.01f, 0.01f, 0.02f, 0.85f));
-        
+        // Overlay de fondo (Blur simulado con opacidad alta)
+        ImGui::PushStyleColor(ImGuiCol_ModalWindowDimBg, ImVec4(0.02f, 0.02f, 0.04f, 0.85f));
         ImGui::OpenPopup("CyberAlertPopup");
+
         ImVec2 center = ImGui::GetMainViewport()->GetCenter();
-        ImGui::SetNextWindowPos(center, ImGuiCond_Appearing, ImVec2(0.5f, 0.5f));
-        ImGui::SetNextWindowSize(ImVec2(450, 230)); // Ligeramente más amplio para respirar
+        ImGui::SetNextWindowPos(center, ImGuiCond_Always, ImVec2(0.5f, 0.5f));
+        ImGui::SetNextWindowSize(ImVec2(460, 250));
 
-        // Paleta Cyberpunk dependiente del estado
-        // ERROR: Rojo Carmesí | INFO: Cian Neón
-        ImVec4 accentColor = alertIsError ? ImVec4(1.0f, 0.15f, 0.25f, 1.0f) : ImVec4(0.15f, 0.85f, 0.95f, 1.0f);
-        ImVec4 bgPanelColor = ImVec4(0.05f, 0.05f, 0.07f, 1.0f);
+        // Configuración de color basada en el estado
+        ImVec4 accentColor = alertIsError ? ImVec4(1.0f, 0.25f, 0.3f, 1.0f) : ImVec4(0.55f, 0.36f, 0.96f, 1.0f);
+        ImU32 accentU32 = ImGui::ColorConvertFloat4ToU32(accentColor);
 
-        ImGui::PushStyleColor(ImGuiCol_PopupBg, bgPanelColor);
-        ImGui::PushStyleColor(ImGuiCol_Border, accentColor);
+        ImGui::PushStyleColor(ImGuiCol_PopupBg, ImVec4(0.08f, 0.08f, 0.12f, 1.00f));
+        ImGui::PushStyleColor(ImGuiCol_Border, ImVec4(accentColor.x, accentColor.y, accentColor.z, 0.45f));
         ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 1.5f);
         ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 12.0f);
 
         if (ImGui::BeginPopupModal("CyberAlertPopup", NULL, ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove)) 
         {
-            float windowWidth = ImGui::GetWindowSize().x;
             ImDrawList* drawList = ImGui::GetWindowDrawList();
-            ImVec2 pos = ImGui::GetWindowPos();
+            ImVec2 p = ImGui::GetWindowPos();
+            ImVec2 s = ImGui::GetWindowSize();
 
-            // 1. Barra superior decorativa (LED Indicator)
-            drawList->AddRectFilled(pos, ImVec2(pos.x + windowWidth, pos.y + 6.0f), 
-                                    ImGui::ColorConvertFloat4ToU32(accentColor), 12.0f, ImDrawFlags_RoundCornersTop);
+            // --- 1. EFECTO DE GLOW EXTERIOR (DROP SHADOW NEÓN) ---
+            for (int i = 0; i < 10; i++) {
+                drawList->AddRect(ImVec2(p.x - i, p.y - i), ImVec2(p.x + s.x + i, p.y + s.y + i), 
+                    ImGui::ColorConvertFloat4ToU32(ImVec4(accentColor.x, accentColor.y, accentColor.z, (0.15f - i * 0.015f))), 12.0f, 0, 1.5f);
+            }
 
-            // 2. Título principal con corchetes de terminal
-            ImGui::SetCursorPosY(30);
-            std::string formattedTitle = alertIsError ? "[ CRITICAL ERROR ]" : "[ SYSTEM NOTICE ]";
+            // --- 2. INDICADOR SUPERIOR (SCANNING LINE) ---
+            float lineGlow = (sin(ImGui::GetTime() * 4.0f) * 0.5f) + 0.5f;
+            drawList->AddRectFilledMultiColor(p, ImVec2(p.x + s.x, p.y + 3), 
+                accentU32, accentU32, IM_COL32(0,0,0,0), IM_COL32(0,0,0,0));
             
-            ImGui::PushStyleColor(ImGuiCol_Text, accentColor);
-            float textWidth = ImGui::CalcTextSize(formattedTitle.c_str()).x;
-            ImGui::SetCursorPosX((windowWidth - textWidth) * 0.5f);
-            ImGui::Text(formattedTitle.c_str());
-            ImGui::PopStyleColor();
-
-            // Línea separadora ultra fina
-            ImGui::SetCursorPosY(55);
-            ImGui::SetCursorPosX(30);
-            drawList->AddLine(ImVec2(pos.x + 30, pos.y + 55), ImVec2(pos.x + windowWidth - 30, pos.y + 55), IM_COL32(255, 255, 255, 20));
-
-            // 3. Mensaje
-            ImGui::SetCursorPosY(75);
-            ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.85f, 0.85f, 0.90f, 1.0f)); // Texto blanco-azulado claro
-            ImGui::PushTextWrapPos(windowWidth - 30); // Margen derecho
-            ImGui::SetCursorPosX(30);                 // Margen izquierdo
+            // --- 3. HEADER & TÍTULO ---
+            ImGui::SetCursorPosY(35);
+            ImGui::PushFont(ImGui::GetIO().Fonts->Fonts[0]);
             
+            const char* headerIcon = alertIsError ? "[!] CRITICAL ERROR" : "[>] SYSTEM NOTIFICATION";
+            float tw = ImGui::CalcTextSize(headerIcon).x;
+            ImGui::SetCursorPosX((s.x - tw) * 0.5f);
+            ImGui::TextColored(accentColor, headerIcon);
+            ImGui::PopFont();
+
+            // --- 4. CUERPO DEL MENSAJE (TIPO TERMINAL) ---
+            ImGui::SetCursorPos(ImVec2(40, 90));
+            ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.85f, 0.85f, 0.90f, 0.9f));
+            ImGui::PushTextWrapPos(s.x - 40);
             ImGui::TextWrapped("%s", alertMessage.c_str());
-            
             ImGui::PopTextWrapPos();
             ImGui::PopStyleColor();
 
-            // 4. Botón de Confirmación "Hacker"
-            ImGui::SetCursorPosY(165);
+            // --- 5. BOTÓN DE CIERRE (ESTILO CSS ACTION) ---
+            ImGui::SetCursorPos(ImVec2(40, s.y - 70));
             
-            // Estilo del botón (Borde transparente, texto del color del acento)
-            ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.08f, 0.08f, 0.12f, 1.0f));
-            ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.12f, 0.12f, 0.18f, 1.0f));
-            ImGui::PushStyleColor(ImGuiCol_ButtonActive, accentColor);
-            ImGui::PushStyleColor(ImGuiCol_Text, accentColor);
-            ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, 6.0f);
+            ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(accentColor.x, accentColor.y, accentColor.z, 0.12f));
+            ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(accentColor.x, accentColor.y, accentColor.z, 0.25f));
+            ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(accentColor.x, accentColor.y, accentColor.z, 0.40f));
+            ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, 4.0f);
             
-            const char* btnText = "A C K N O W L E D G E";
-            float btnWidth = 240.0f;
-            ImGui::SetCursorPosX((windowWidth - btnWidth) * 0.5f);
-            
-            if (ImGui::Button(btnText, ImVec2(btnWidth, 40))) 
+            if (ImGui::Button("D I S M I S S", ImVec2(s.x - 80, 45))) 
             {
                 showAlert = false;
                 ImGui::CloseCurrentPopup();
             }
-            
+            if (ImGui::IsItemHovered()) ImGui::SetMouseCursor(ImGuiMouseCursor_Hand);
+
             ImGui::PopStyleVar();
-            ImGui::PopStyleColor(4);
+            ImGui::PopStyleColor(3);
 
             ImGui::EndPopup();
         }
-        
         ImGui::PopStyleVar(2);
-        ImGui::PopStyleColor(3);
+        ImGui::PopStyleColor(4);
     }
 
-// ==========================================================
-    // SPLASH SCREEN (PANTALLA DE CARGA - CYBER 2026)
-    // ==========================================================
-    void Menu::DrawSplashScreen() 
+void Menu::DrawSplashScreen() 
     {
         static std::vector<std::string> steps = {
-            "INITIALIZING NEURAL KERNEL...", 
-            "ESTABLISHING SECURE HANDSHAKE...", 
-            "DECRYPTING RENDER API TOKENS...", 
-            "BYPASS PROTOCOL READY"
+            "BOOTING NEURAL KERNEL...", 
+            "ESTABLISHING ENCRYPTED LINK...", 
+            "DECRYPTING RENDER TOKENS...", 
+            "SYSTEM VITALITY: OPTIMAL"
         };
         
         static auto startTime = std::chrono::steady_clock::now();
         auto currentTime = std::chrono::steady_clock::now();
         float elapsedTime = std::chrono::duration<float>(currentTime - startTime).count();
+        float deltaTime = ImGui::GetIO().DeltaTime;
 
-        // Control del progreso lógico
-        if (elapsedTime > 0.6f && splashStep < steps.size()) 
+        // --- 1. LÓGICA DE PROGRESO "LIQUID FLOW" ---
+        if (elapsedTime > 0.8f && splashStep < (int)steps.size()) 
         {
             splashStep++;
-            splashProgress = (float)splashStep / steps.size();
+            splashProgress = (float)splashStep / (float)steps.size();
             startTime = currentTime; 
         }
 
-        // Interpolación visual fluida (Para que la barra no "salte" de golpe, sino que se deslice)
+        // Interpolación suavizada (Lerp) para evitar saltos bruscos en la barra
         static float visualProgress = 0.0f;
-        visualProgress += (splashProgress - visualProgress) * ImGui::GetIO().DeltaTime * 5.0f;
+        visualProgress = ImLerp(visualProgress, splashProgress, deltaTime * 2.8f);
 
-        // Si ya cargó todo visualmente y lógicamente, pasa a la pantalla de Login
-        if (splashStep >= steps.size() && visualProgress >= 0.99f) 
+        // Umbral de finalización con Fade-out virtual
+        if (splashStep >= (int)steps.size() && visualProgress >= 0.99f) 
         {
-            currentState = AppState::LoginScreen;
-            return;
+            static float fadeOut = 1.0f;
+            fadeOut -= deltaTime * 2.0f;
+            if (fadeOut <= 0.0f) {
+                currentState = AppState::LoginScreen;
+                return;
+            }
         }
 
-        ImVec2 windowSize = ImGui::GetWindowSize();
-        ImDrawList* drawList = ImGui::GetWindowDrawList();
-        
-        // --- Renderizado del Título ---
-        ImGui::SetCursorPosY(windowSize.y * 0.40f);
+        const ImGuiViewport* viewport = ImGui::GetMainViewport();
+        ImVec2 screenSize = viewport->WorkSize;
+        ImDrawList* drawList = ImGui::GetBackgroundDrawList(); 
+        ImVec2 center = ImVec2(screenSize.x * 0.5f, screenSize.y * 0.5f);
+
+        // --- 2. RENDERIZADO DEL TÍTULO (CYBER BLOOM) ---
         const char* title = "S C A N N E L E R";
-        float titleWidth = ImGui::CalcTextSize(title).x;
-        ImGui::SetCursorPosX((windowSize.x - titleWidth) * 0.5f);
-        ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.55f, 0.36f, 0.96f, 1.0f)); // Violeta Neón
-        ImGui::Text(title); 
-        ImGui::PopStyleColor();
+        float titleFontSize = 42.0f; 
+        ImVec2 titleSize = ImGui::CalcTextSize(title);
+        ImVec2 titlePos = ImVec2(center.x - titleSize.x * 0.5f, center.y - 100.0f);
 
-        // Subtítulo
-        ImGui::SetCursorPosY(windowSize.y * 0.45f);
-        const char* subTitle = "S Y S T E M   I N I T I A L I Z A T I O N";
-        float subWidth = ImGui::CalcTextSize(subTitle).x;
-        ImGui::SetCursorPosX((windowSize.x - subWidth) * 0.5f);
-        ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.3f, 0.33f, 0.39f, 1.0f)); // Gris Oscuro
-        ImGui::Text(subTitle);
-        ImGui::PopStyleColor();
-
-        // --- Renderizado del texto del paso actual y porcentaje ---
-        ImGui::SetCursorPosY(windowSize.y * 0.62f);
-        std::string currentText = (splashStep < steps.size()) ? steps[splashStep] : "READY";
+        // Efecto de aberración cromática sutil (Glow capas)
+        drawList->AddText(NULL, titleFontSize, titlePos + ImVec2(2, 0), IM_COL32(255, 0, 80, 40), title); // Red shift
+        drawList->AddText(NULL, titleFontSize, titlePos - ImVec2(2, 0), IM_COL32(0, 255, 255, 40), title); // Cyan shift
         
-        // Añadimos el porcentaje real calculándolo desde el visualProgress
-        char statusBuffer[128];
-        snprintf(statusBuffer, sizeof(statusBuffer), "%s  [ %d%% ]", currentText.c_str(), (int)(visualProgress * 100.0f));
-        
-        float textWidth = ImGui::CalcTextSize(statusBuffer).x;
-        ImGui::SetCursorPosX((windowSize.x - textWidth) * 0.5f);
-        ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.15f, 0.85f, 0.95f, 1.0f)); // Cian brillante
-        ImGui::Text(statusBuffer);
-        ImGui::PopStyleColor();
+        // Resplandor central (Bloom)
+        for (int i = 0; i < 3; i++)
+            drawList->AddText(NULL, titleFontSize, titlePos, IM_COL32(139, 92, 246, 50 / (i + 1)), title);
+            
+        drawList->AddText(NULL, titleFontSize, titlePos, IM_COL32(255, 255, 255, 255), title);
 
-        // --- Renderizado de la Barra de Progreso Custom (Estilo Holográfico) ---
-        float barWidth = 450.0f;
-        float barHeight = 4.0f; // Muy delgada y elegante
-        ImVec2 barPos((windowSize.x - barWidth) * 0.5f, windowSize.y * 0.67f);
+        // --- 3. BARRA DE PROGRESO "NEURAL LINK" ---
+        float barWidth = 500.0f;
+        if (barWidth > screenSize.x * 0.8f) barWidth = screenSize.x * 0.8f;
+        float barHeight = 2.0f;
+        ImVec2 barPos(center.x - barWidth * 0.5f, center.y + 20.0f);
 
-        // Fondo de la barra (Gris oscuro)
-        drawList->AddRectFilled(barPos, ImVec2(barPos.x + barWidth, barPos.y + barHeight), 
-                                IM_COL32(30, 30, 40, 255), 2.0f);
+        // Carril (Track) con diseño segmentado sutil
+        drawList->AddRectFilled(barPos, barPos + ImVec2(barWidth, barHeight), IM_COL32(255, 255, 255, 10), 10.0f);
 
-        // Relleno de la barra (Violeta)
-        float currentFillWidth = barWidth * visualProgress;
-        drawList->AddRectFilled(barPos, ImVec2(barPos.x + currentFillWidth, barPos.y + barHeight), 
-                                IM_COL32(139, 92, 246, 255), 2.0f);
+        // Relleno (Fill) con gradiente dinámico
+        float fillWidth = barWidth * visualProgress;
+        if (fillWidth > 1.0f) {
+            // Gradiente: Violeta -> Cian -> Violeta (Efecto de energía fluyendo)
+            drawList->AddRectFilledMultiColor(
+                barPos, barPos + ImVec2(fillWidth, barHeight),
+                IM_COL32(139, 92, 246, 255), IM_COL32(0, 255, 255, 255), 
+                IM_COL32(0, 255, 255, 255), IM_COL32(139, 92, 246, 255)
+            );
 
-        // Borde brillante holográfico (Cian)
-        drawList->AddRect(ImVec2(barPos.x - 2, barPos.y - 2), 
-                          ImVec2(barPos.x + barWidth + 2, barPos.y + barHeight + 2), 
-                          IM_COL32(0, 255, 255, 80), 4.0f, 0, 1.0f);
-                          
-        // Pequeño acento luminoso en la punta de la barra
-        if (visualProgress > 0.0f && visualProgress < 1.0f) 
-        {
-            drawList->AddRectFilled(ImVec2(barPos.x + currentFillWidth - 10, barPos.y - 1), 
-                                    ImVec2(barPos.x + currentFillWidth, barPos.y + barHeight + 1), 
-                                    IM_COL32(0, 255, 255, 255), 2.0f);
+            // Cabezal de la barra (Flare)
+            float flareX = barPos.x + fillWidth;
+            drawList->AddCircleFilled(ImVec2(flareX, barPos.y + 1), 4.0f, IM_COL32(255, 255, 255, 255));
+            drawList->AddCircleFilled(ImVec2(flareX, barPos.y + 1), 15.0f, IM_COL32(0, 255, 255, 30)); // Glow circular
         }
+
+        // --- 4. STATUS FEED (TEXTO DE TERMINAL) ---
+        std::string statusMsg = (splashStep < (int)steps.size()) ? steps[splashStep] : "NEURAL LINK ESTABLISHED";
+        
+        // Porcentaje a la derecha con opacidad variable
+        char perc[16]; snprintf(perc, 16, "%d%%", (int)(visualProgress * 100));
+        
+        drawList->AddText(barPos + ImVec2(0, 15), IM_COL32(0, 255, 255, 180), statusMsg.c_str());
+        
+        float percW = ImGui::CalcTextSize(perc).x;
+        drawList->AddText(barPos + ImVec2(barWidth - percW, 15), IM_COL32(255, 255, 255, 80), perc);
+
+        // --- 5. DETALLE COSMÉTICO: SCANLINE LOCALIZADO ---
+        static float scanlineY = 0.0f;
+        scanlineY += deltaTime * 300.0f;
+        if (scanlineY > screenSize.y) scanlineY = 0.0f;
+        
+        drawList->AddLine(ImVec2(0, scanlineY), ImVec2(screenSize.x, scanlineY), IM_COL32(255, 255, 255, 15), 1.0f);
     }
 
 // ==========================================================
-    // LOGIN FRAME (AUTENTICACIÓN Y CANJE - CYBER 2026)
-    // ==========================================================
-    void Menu::DrawLoginFrame() 
+// LOGIN FRAME (PREMIUM UI - ELITE 2026)
+// ==========================================================
+void Menu::DrawLoginFrame() 
+{
+    const ImGuiViewport* viewport = ImGui::GetMainViewport();
+    float dt = ImGui::GetIO().DeltaTime;
+    
+    float panelW = 440.0f;
+    float panelH = 640.0f; 
+
+    ImGui::SetNextWindowPos(viewport->GetCenter(), ImGuiCond_Always, ImVec2(0.5f, 0.5f));
+    ImGui::SetNextWindowSize(ImVec2(panelW + 60, panelH + 60)); 
+
+    ImGuiWindowFlags flags = ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove | 
+                             ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoBackground;
+
+    if (ImGui::Begin("LoginMaster", NULL, flags)) 
     {
-        ImVec2 windowSize = ImGui::GetWindowSize();
-        
-        // Dimensiones del panel central (Un poco más ancho para mejor legibilidad)
-        float panelW = 440.0f;
-        float panelH = 640.0f; 
-        ImGui::SetCursorPos(ImVec2((windowSize.x - panelW) * 0.5f, (windowSize.y - panelH) * 0.5f));
+        ImDrawList* drawList = ImGui::GetWindowDrawList();
+        ImVec2 p = ImGui::GetWindowPos() + ImVec2(30, 30);
 
-        // Estilo visual del panel: Fondo Obsidiana con borde sutil Cian
-        ImGui::PushStyleColor(ImGuiCol_ChildBg, ImVec4(0.04f, 0.04f, 0.06f, 0.95f)); 
-        ImGui::PushStyleVar(ImGuiStyleVar_ChildRounding, 16.0f);
-        ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 1.0f);
-        ImGui::PushStyleColor(ImGuiCol_Border, ImVec4(0.0f, 0.8f, 0.9f, 0.3f)); // Cian semitransparente
+        // --- 1. LÓGICA DE ELEVACIÓN ---
+        static float panelHoverScale = 0.0f;
+        bool isOverPanel = ImGui::IsMouseHoveringRect(p, p + ImVec2(panelW, panelH));
+        panelHoverScale = ImLerp(panelHoverScale, isOverPanel ? 1.0f : 0.0f, dt * 4.0f);
 
-        if (ImGui::BeginChild("LoginPanel", ImVec2(panelW, panelH), true)) 
+        // --- 2. MULTI-LAYER BOX SHADOW ---
+        for (int i = 0; i < 20; i++) {
+            float shadowAlpha = (25.0f - i) * (1.0f + panelHoverScale * 0.5f);
+            drawList->AddRect(p - ImVec2((float)i, (float)i), p + ImVec2(panelW + i, panelH + i), 
+                              IM_COL32(0, 0, 0, (int)shadowAlpha), 20.0f, 0, 1.5f);
+        }
+
+        // --- 3. CUERPO GLASSMORPHISM ---
+        drawList->AddRectFilled(p, p + ImVec2(panelW, panelH), IM_COL32(12, 12, 18, 253), 18.0f);
+        drawList->AddRect(p, p + ImVec2(panelW, panelH), IM_COL32(255, 255, 255, 15), 18.0f, 0, 1.0f);
+
+        // --- 4. BRANDING ---
+        drawList->AddText(NULL, 32.0f, p + ImVec2(40, 60), IM_COL32(255, 255, 255, 240), "S C A N N E L E R");
+        drawList->AddText(p + ImVec2(40, 100), IM_COL32(100, 110, 140, 255), "CORE_SYSTEM_ACCESS_v4.2");
+
+        // --- 5. INPUTS CUSTOM ---
+        auto DrawEliteInput = [&](const char* label, char* buf, bool isPass, float y) 
         {
-            // --- Títulos y Branding ---
-            ImGui::SetCursorPosY(50);
+            ImGui::SetCursorPos(ImVec2(40, y));
+            ImVec2 inSize(360, 55);
+            ImVec2 curPos = ImGui::GetCursorScreenPos();
             
-            // Efecto de sombra para el título
-            const char* title = "S C A N N E L E R";
-            float textW = ImGui::CalcTextSize(title).x;
+            drawList->AddRectFilled(curPos, curPos + inSize, IM_COL32(20, 20, 30, 255), 10.0f);
+            ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(15, 16));
+            ImGui::PushStyleColor(ImGuiCol_FrameBg, IM_COL32(0,0,0,0)); 
+            ImGui::PushItemWidth(inSize.x);
             
-            ImGui::SetCursorPosX((panelW - textW) * 0.5f + 2);
-            ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.0f, 0.0f, 0.0f, 0.8f)); 
-            ImGui::Text(title); // Sombra
-            ImGui::PopStyleColor();
-            
-            ImGui::SetCursorPos(ImVec2((panelW - textW) * 0.5f, 50));
-            ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.9f, 0.9f, 0.95f, 1.0f)); // Blanco brillante
-            ImGui::Text(title); // Texto real
-            ImGui::PopStyleColor();
+            std::string id = std::string("##") + label;
+            if (isPass) ImGui::InputTextWithHint(id.c_str(), label, buf, 256, ImGuiInputTextFlags_Password);
+            else ImGui::InputTextWithHint(id.c_str(), label, buf, 256);
 
-            const char* sub = "SECURE ACCESS PROTOCOL v3.0";
-            textW = ImGui::CalcTextSize(sub).x;
-            ImGui::SetCursorPosX((panelW - textW) * 0.5f);
-            ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.4f, 0.45f, 0.55f, 1.0f)); // Gris azulado
-            ImGui::Text(sub);
-            ImGui::PopStyleColor();
-
-            // Separador sutil
-            ImDrawList* drawList = ImGui::GetWindowDrawList();
-            ImVec2 pos = ImGui::GetWindowPos();
-            drawList->AddLine(ImVec2(pos.x + 60, pos.y + 110), ImVec2(pos.x + panelW - 60, pos.y + 110), IM_COL32(255,255,255,20));
-
-            // --- Estilos para Inputs de Datos ---
-            ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, 8.0f);
-            ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(15, 12)); // Inputs más altos y cómodos
-            ImGui::PushStyleColor(ImGuiCol_FrameBg, ImVec4(0.08f, 0.08f, 0.12f, 1.0f));
-            ImGui::PushStyleColor(ImGuiCol_FrameBgHovered, ImVec4(0.12f, 0.12f, 0.18f, 1.0f));
-            ImGui::PushStyleColor(ImGuiCol_FrameBgActive, ImVec4(0.1f, 0.1f, 0.15f, 1.0f));
-            ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.85f, 0.85f, 0.90f, 1.0f)); // Texto del input
-
-            float inputWidth = 340.0f;
-            
-            // Input de Usuario
-            ImGui::SetCursorPosY(160);
-            ImGui::SetCursorPosX((panelW - inputWidth) * 0.5f);
-            ImGui::PushItemWidth(inputWidth);
-            ImGui::InputTextWithHint("##User", "  U S E R N A M E", userBuffer, 256);
-            
-            // Input de Contraseña
-            ImGui::SetCursorPosY(230);
-            ImGui::SetCursorPosX((panelW - inputWidth) * 0.5f);
-            ImGui::InputTextWithHint("##Pass", "  P A S S W O R D", passBuffer, 256, ImGuiInputTextFlags_Password);
-
-            // Modo Canje (Redeem)
-            static bool showRedeem = false;
-            if (showRedeem) 
-            {
-                ImGui::SetCursorPosY(300);
-                ImGui::SetCursorPosX((panelW - inputWidth) * 0.5f);
-                ImGui::InputTextWithHint("##Key", "  L I C E N S E   K E Y", keyBuffer, 256);
-            }
+            bool active = ImGui::IsItemActive();
+            inputAnims[label] = ImLerp(inputAnims[label], active ? 1.0f : 0.0f, dt * 12.0f);
+            ImU32 bordCol = ImGui::ColorConvertFloat4ToU32(ImLerp(ImVec4(0.2f, 0.2f, 0.3f, 0.3f), ImVec4(0.55f, 0.36f, 0.96f, 1.0f), inputAnims[label]));
+            drawList->AddRect(curPos, curPos + inSize, bordCol, 10.0f, 0, 1.5f);
             
             ImGui::PopItemWidth();
-            ImGui::PopStyleColor(4); // Limpiamos colores de inputs
-            ImGui::PopStyleVar(2);   // Limpiamos paddings de inputs
-
-            // --- Mensaje de Estado / Errores (Estilo Terminal) ---
-            float statusY = showRedeem ? 370.0f : 320.0f;
-            ImGui::SetCursorPosY(statusY);
-            
-            std::string consoleMsg = loginStatus.empty() ? "[WAITING FOR INPUT]" : "[>] " + loginStatus;
-            textW = ImGui::CalcTextSize(consoleMsg.c_str()).x;
-            ImGui::SetCursorPosX((panelW - textW) * 0.5f);
-            
-            ImVec4 statusColor = isLoginError ? ImVec4(1.0f, 0.3f, 0.3f, 1.0f) : // Rojo Error
-                                 (loginStatus.empty() ? ImVec4(0.3f, 0.35f, 0.4f, 1.0f) : // Gris Reposo
-                                 ImVec4(0.2f, 0.8f, 0.9f, 1.0f)); // Cian Conectando
-                                 
-            ImGui::PushStyleColor(ImGuiCol_Text, statusColor);
-            ImGui::TextWrapped(consoleMsg.c_str());
             ImGui::PopStyleColor();
-
-            // --- Botón de Ejecución Principal ---
-            ImGui::SetCursorPosY(440);
-            ImGui::SetCursorPosX((panelW - inputWidth) * 0.5f);
-
-            static bool isConnecting = false;
-            
-            // Estilos del Botón Principal
-            ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, 8.0f);
-            ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.40f, 0.20f, 0.80f, 0.90f)); // Violeta
-            ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.50f, 0.30f, 0.95f, 1.00f));
-            ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(0.20f, 0.80f, 0.90f, 1.00f)); // Cian al hacer clic
-            ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.0f, 1.0f, 1.0f, 1.0f));
-
-            if (isConnecting) 
-            {
-                ImGui::PushStyleVar(ImGuiStyleVar_Alpha, 0.5f);
-                ImGui::Button("A U T H E N T I C A T I N G . . .", ImVec2(inputWidth, 55));
-                ImGui::PopStyleVar();
-            } 
-            else 
-            {
-                const char* btnLabel = showRedeem ? "R E D E E M   &   L O G I N" : "I N I T I A L I Z E   L O G I N";
-                
-                if (ImGui::Button(btnLabel, ImVec2(inputWidth, 55))) 
-                {
-                    isConnecting = true;
-                    isLoginError = false;
-                    loginStatus = "NEGOTIATING HANDSHAKE...";
-
-                    if (showRedeem) 
-                    {
-                        auto reg = Auth::ApiClient::RedeemKey(userBuffer, keyBuffer, passBuffer);
-                        if (reg.success) 
-                        {
-                            auto res = Auth::ApiClient::ValidateLogin(userBuffer, passBuffer);
-                            if (res.success) 
-                            {
-                                isAdmin = (res.role == "admin" || res.role == "super_admin");
-                                currentState = AppState::MainScreen;
-                            } 
-                            else { loginStatus = res.message; isLoginError = true; }
-                        } 
-                        else { loginStatus = reg.message; isLoginError = true; }
-                    } 
-                    else 
-                    {
-                        auto res = Auth::ApiClient::ValidateLogin(userBuffer, passBuffer);
-                        if (res.success) 
-                        {
-                            isAdmin = (res.role == "admin" || res.role == "super_admin");
-                            currentState = AppState::MainScreen;
-                        } 
-                        else { loginStatus = res.message; isLoginError = true; }
-                    }
-                    isConnecting = false;
-                }
-            }
-            ImGui::PopStyleColor(4); // Limpiar colores del botón
-            ImGui::PopStyleVar();    // Limpiar rounding del botón
-
-            // ==========================================================
-            // TEXTO INTERACTIVO (CORRECCIÓN DEL BUG DE HITBOX)
-            // ==========================================================
-            ImGui::SetCursorPosY(520);
-            
-            const char* toggleText = showRedeem ? "Already registered? Return to Login" : "No account? Activate License Key";
-            textW = ImGui::CalcTextSize(toggleText).x;
-            ImGui::SetCursorPosX((panelW - textW) * 0.5f);
-            
-            // Guardamos la posición exacta en pantalla donde se dibujará el texto
-            ImVec2 textPos = ImGui::GetCursorScreenPos();
-            
-            // Dibujamos el texto normal en gris oscuro
-            ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.4f, 0.45f, 0.55f, 1.0f));
-            ImGui::Text(toggleText);
-            ImGui::PopStyleColor();
-
-            // Detectamos si el mouse está exactamente encima de este texto
-            if (ImGui::IsItemHovered()) 
-            {
-                // Cambiamos el cursor a la "manito"
-                ImGui::SetMouseCursor(ImGuiMouseCursor_Hand);
-                // Dibujamos el texto iluminado encima del anterior
-                ImGui::GetWindowDrawList()->AddText(textPos, ImGui::ColorConvertFloat4ToU32(ImVec4(0.2f, 0.8f, 0.9f, 1.0f)), toggleText);
-            }
-
-            // Detectamos el clic exacto
-            if (ImGui::IsItemClicked()) 
-            {
-                showRedeem = !showRedeem;
-                loginStatus = "";
-                isLoginError = false;
-            }
-        }
-        
-        ImGui::EndChild();
-        ImGui::PopStyleVar(2);
-        ImGui::PopStyleColor(2);
-    }
-
-// ==========================================================
-    // MAIN FRAME (PANTALLA PRINCIPAL / HUD DASHBOARD - CYBER 2026)
-    // ==========================================================
-    void Menu::DrawMainFrame() 
-    {
-        ImVec2 winSize = ImGui::GetWindowSize();
-        
-        static bool showSettingsModal = false;
-        static bool isWaitingForKey = false;
-
-        float panelW = winSize.x * 0.85f;
-        float panelH = winSize.y * 0.85f;
-        ImGui::SetCursorPos(ImVec2((winSize.x - panelW) * 0.5f, (winSize.y - panelH) * 0.5f));
-
-        // Empujamos 2 colores y 2 variables de estilo
-        ImGui::PushStyleColor(ImGuiCol_ChildBg, ImVec4(0.04f, 0.04f, 0.06f, 0.95f)); 
-        ImGui::PushStyleColor(ImGuiCol_Border, ImVec4(0.15f, 0.20f, 0.30f, 1.0f)); 
-        ImGui::PushStyleVar(ImGuiStyleVar_ChildRounding, 16.0f);
-        ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 1.0f);
-
-        if (ImGui::BeginChild("MainPanel", ImVec2(panelW, panelH), true)) 
-        {
-            // --- 1. HEADER Y DATOS DEL USUARIO ---
-            ImGui::SetCursorPos(ImVec2(30, 30));
-            ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.2f, 0.8f, 0.9f, 1.0f)); 
-            ImGui::Text("N E X U S   C O R E   //   M A I N   D A S H B O A R D");
-            ImGui::PopStyleColor(); // Cierra 1
-            
-            ImGui::SetCursorPosX(30);
-            ImGui::Separator();
-            
-            ImGui::SetCursorPos(ImVec2(30, 70));
-            ImGui::PushFont(ImGui::GetIO().Fonts->Fonts[0]); // Empuja fuente
-            ImGui::Text("WELCOME OPERATIVE,");
-            ImGui::SameLine();
-            ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.55f, 0.36f, 0.96f, 1.0f)); 
-            
-            std::string userUpper = userBuffer;
-            for(auto & c: userUpper) c = toupper(c);
-            ImGui::Text("%s", userUpper.c_str());
-            ImGui::PopStyleColor(); // Cierra 1
-            ImGui::PopFont();       // CORRECCIÓN: Cierra la fuente
-
-            ImGui::SetCursorPosX(30);
-            ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.4f, 0.45f, 0.55f, 1.0f));
-            ImGui::Text("CLEARANCE LEVEL: %s", isAdmin ? "[ ROOT ACCESS ]" : "[ STANDARD ACCESS ]");
-            ImGui::PopStyleColor(); // Cierra 1
-
-            ImGui::Spacing(); ImGui::Spacing();
-
-            // --- 2. MODULO DE ESTADO (STATUS CARD) ---
-            ImGui::SetCursorPosX(30);
-            ImGui::PushStyleColor(ImGuiCol_ChildBg, ImVec4(0.02f, 0.02f, 0.03f, 1.0f)); 
-            ImGui::PushStyleVar(ImGuiStyleVar_ChildRounding, 8.0f);
-            
-            if (ImGui::BeginChild("StatusCard", ImVec2(panelW - 60, 90), true)) 
-            {
-                ImGui::SetCursorPos(ImVec2(15, 15));
-                ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.0f, 1.0f, 0.5f, 1.0f)); 
-                ImGui::Text("[OK]"); 
-                ImGui::SameLine(); 
-                ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.7f, 0.7f, 0.75f, 1.0f));
-                ImGui::Text(" HARDWARE ID SYNCED & VERIFIED");
-                ImGui::PopStyleColor(2); // Cierra 2
-
-                ImGui::SetCursorPosX(15);
-                ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.0f, 1.0f, 0.5f, 1.0f)); 
-                ImGui::Text("[OK]"); 
-                ImGui::SameLine(); 
-                ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.7f, 0.7f, 0.75f, 1.0f));
-                ImGui::Text(" SECURE CONNECTION TO API: ESTABLISHED");
-                ImGui::PopStyleColor(2); // Cierra 2
-
-                ImGui::SetCursorPosX(15);
-                ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.0f, 1.0f, 0.5f, 1.0f)); 
-                ImGui::Text("[OK]"); 
-                ImGui::SameLine(); 
-                ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.7f, 0.7f, 0.75f, 1.0f));
-                ImGui::Text(" KERNEL DRIVERS INJECTED");
-                ImGui::PopStyleColor(2); // Cierra 2
-            }
-            ImGui::EndChild();
             ImGui::PopStyleVar();
-            ImGui::PopStyleColor();
-
-            ImGui::Spacing(); ImGui::Spacing(); ImGui::Spacing();
-
-            // --- 3. CENTRO DE COMANDOS ---
-            ImGui::SetCursorPosX(30);
-            
-            ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, 8.0f);
-            ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.40f, 0.20f, 0.80f, 0.90f));
-            ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.50f, 0.30f, 0.95f, 1.00f));
-            ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(0.20f, 0.80f, 0.90f, 1.00f));
-            
-            if (ImGui::Button("I N I T I A T E   G H O S T   P R O T O C O L", ImVec2(panelW - 60, 65))) 
-            {
-                currentState = AppState::BypassScreen;
-            }
-            ImGui::PopStyleColor(3); // Cierra 3
-
-            ImGui::Spacing();
-
-            if (isAdmin) 
-            {
-                ImGui::SetCursorPosX(30);
-                ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.18f, 0.04f, 0.04f, 1.0f));
-                ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.25f, 0.05f, 0.05f, 1.0f));
-                ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(0.3f, 0.05f, 0.05f, 1.0f));
-                ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.0f, 0.4f, 0.4f, 1.0f)); 
-                
-                if (ImGui::Button("A C C E S S   A D M I N   C O N S O L E", ImVec2(panelW - 60, 45))) 
-                {
-                    currentState = AppState::AdminScreen;
-                }
-                ImGui::PopStyleColor(4); // Cierra 4
-            }
-
-            // --- 4. PANEL INFERIOR (CONFIG & LOGOUT) ---
-            ImGui::SetCursorPos(ImVec2(30, panelH - 60)); 
-            
-            float halfBtnW = (panelW - 70) / 2.0f; 
-
-            ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.15f, 0.15f, 0.22f, 1.0f)); 
-            ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.2f, 0.2f, 0.3f, 1.0f));
-            ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.8f, 0.8f, 0.9f, 1.0f)); 
-            
-            if (ImGui::Button("S Y S   C O N F I G", ImVec2(halfBtnW, 40))) 
-            {
-                showSettingsModal = true;
-            }
-            ImGui::PopStyleColor(3); // Cierra 3
-
-            ImGui::SameLine();
-
-            ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.08f, 0.08f, 0.12f, 1.0f)); 
-            ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.12f, 0.12f, 0.18f, 1.0f));
-            ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.5f, 0.5f, 0.6f, 1.0f)); 
-            
-            if (ImGui::Button("D I S C O N N E C T", ImVec2(halfBtnW, 40))) 
-            {
-                memset(userBuffer, 0, sizeof(userBuffer));
-                memset(passBuffer, 0, sizeof(passBuffer));
-                memset(keyBuffer, 0, sizeof(keyBuffer));
-                isAdmin = false;
-                currentState = AppState::LoginScreen;
-            }
-            ImGui::PopStyleColor(3); // Cierra 3
-            ImGui::PopStyleVar(); // Cierra el FrameRounding de esta sección
-        }
-        ImGui::EndChild();
-        ImGui::PopStyleVar(2);     // Cierra ChildRounding y BorderSize principales
-        ImGui::PopStyleColor(2);   // CORRECCIÓN: Cierra el ChildBg y el Border principales
-
-        // ==========================================================
-        // MODAL DE CONFIGURACIÓN (SYS CONFIG)
-        // ==========================================================
-        if (showSettingsModal) 
-        {
-            ImGui::OpenPopup("SYSTEM CONFIGURATION");
-            showSettingsModal = false; 
-            isWaitingForKey = false;   
-        }
-
-        // Empujamos colores para el Modal
-        ImGui::PushStyleColor(ImGuiCol_ModalWindowDimBg, ImVec4(0.01f, 0.01f, 0.02f, 0.85f));
-        ImVec2 center = ImGui::GetMainViewport()->GetCenter();
-        ImGui::SetNextWindowPos(center, ImGuiCond_Appearing, ImVec2(0.5f, 0.5f));
-        ImGui::SetNextWindowSize(ImVec2(480, 360));
-
-        ImGui::PushStyleColor(ImGuiCol_PopupBg, ImVec4(0.05f, 0.05f, 0.07f, 1.0f));
-        ImGui::PushStyleColor(ImGuiCol_Border, ImVec4(0.15f, 0.85f, 0.95f, 0.5f)); 
-        ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 1.5f);
-        ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 12.0f);
-
-        if (ImGui::BeginPopupModal("SYSTEM CONFIGURATION", NULL, ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove)) 
-        {
-            float modalW = ImGui::GetWindowSize().x;
-
-            ImGui::SetCursorPos(ImVec2(30, 25));
-            ImGui::TextColored(ImVec4(0.15f, 0.85f, 0.95f, 1.0f), "[ GLOBAL PARAMETERS ]");
-            ImGui::SetCursorPos(ImVec2(30, 45));
-            ImGui::Separator();
-            
-            ImGui::Spacing(); ImGui::Spacing();
-
-            ImGui::SetCursorPosX(30);
-            ImGui::TextColored(ImVec4(0.4f, 0.45f, 0.55f, 1.0f), "SYSTEM LANGUAGE:");
-            ImGui::SetCursorPosX(30);
-            if (ImGui::RadioButton("ENGLISH (US)", currentLang == "EN")) currentLang = "EN";
-            ImGui::SameLine(200);
-            if (ImGui::RadioButton("ESPANOL (ES)", currentLang == "ES")) currentLang = "ES";
-            
-            ImGui::Spacing(); ImGui::Spacing();
-            ImGui::SetCursorPosX(30);
-            ImGui::Separator();
-            ImGui::Spacing(); ImGui::Spacing();
-
-            ImGui::SetCursorPosX(30);
-            ImGui::TextColored(ImVec4(0.4f, 0.45f, 0.55f, 1.0f), "CLEANING MODULE:");
-            ImGui::SetCursorPosX(30);
-            ImGui::Checkbox("ENABLE DEEP REGISTRY SWEEP (Requires Admin)", &deepScanEnabled);
-
-            ImGui::Spacing(); ImGui::Spacing();
-            ImGui::SetCursorPosX(30);
-            ImGui::Separator();
-            ImGui::Spacing(); ImGui::Spacing();
-
-            ImGui::SetCursorPosX(30);
-            ImGui::TextColored(ImVec4(0.4f, 0.45f, 0.55f, 1.0f), "GHOST PROTOCOL HOTKEY:");
-            
-            ImGui::SetCursorPosX(30);
-            std::string keyText = isWaitingForKey ? "[ PRESS ANY KEY TO BIND ]" : "[ " + GetKeyName(bypassHotkey) + " ]";
-            
-            if (isWaitingForKey) ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.8f, 0.2f, 0.2f, 0.8f));
-            else ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.15f, 0.15f, 0.22f, 1.0f));
-            
-            if (ImGui::Button(keyText.c_str(), ImVec2(250, 35))) 
-            {
-                isWaitingForKey = true;
-            }
-            ImGui::PopStyleColor(); // Cierra 1
-
-            if (isWaitingForKey) 
-            {
-                for (int i = 8; i <= 255; i++) 
-                {
-                    if (GetAsyncKeyState(i) & 0x8000) 
-                    {
-                        if (i != VK_LBUTTON && i != VK_RBUTTON && i != VK_MBUTTON) 
-                        {
-                            bypassHotkey = i;
-                            isWaitingForKey = false;
-                            break;
-                        }
-                    }
-                }
-            }
-
-            ImGui::SetCursorPos(ImVec2(30, 290));
-            ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, 6.0f);
-            ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.40f, 0.20f, 0.80f, 0.80f));
-            ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.50f, 0.30f, 0.95f, 1.00f));
-            
-            if (ImGui::Button("S A V E   &   R E T U R N", ImVec2(modalW - 60, 45))) 
-            {
-                isWaitingForKey = false; 
-                ImGui::CloseCurrentPopup();
-            }
-            
-            ImGui::PopStyleColor(2); // Cierra 2
-            ImGui::PopStyleVar();    // Cierra 1
-            ImGui::EndPopup();
-        }
-        
-        ImGui::PopStyleVar(2);   // Cierra los 2 Var del Modal
-        ImGui::PopStyleColor(3); // Cierra los 3 Color del Modal (DimBg, PopupBg, Border)
-    }
-
-// ==========================================================
-    // ADMIN FRAME (COMMAND CENTER - CYBER 2026)
-    // ==========================================================
-    void Menu::FetchUsersFromDB() 
-    {
-        cachedUsers.clear();
-        std::string rawJson = Auth::ApiClient::GetAllUsers();
-        
-        try 
-        {
-            auto j = nlohmann::json::parse(rawJson);
-            for (const auto& item : j) 
-            {
-                UserNode u;
-                u.username = item.value("username", "UNK");
-                u.plan = item.value("membresia", "N/A");
-                u.hwid = item.value("hwid", "NONE");
-                cachedUsers.push_back(u);
-            }
-        } 
-        catch (...) 
-        {
-            ShowAlert("API ERROR", "CRITICAL FAILURE PARSING NODE LIST.", true);
-        }
-    }
-
-    void Menu::DrawAdminFrame() 
-    {
-        ImVec2 winSize = ImGui::GetWindowSize();
-
-        float panelW = winSize.x * 0.90f; // Un poco más ancho para las tablas
-        float panelH = winSize.y * 0.88f;
-        ImGui::SetCursorPos(ImVec2((winSize.x - panelW) * 0.5f, (winSize.y - panelH) * 0.5f));
-
-        // Estilo del panel Admin (Fondo obsidiana con borde rojo oscuro para indicar "Zona Peligrosa")
-        ImGui::PushStyleColor(ImGuiCol_ChildBg, ImVec4(0.03f, 0.03f, 0.04f, 0.98f));
-        ImGui::PushStyleVar(ImGuiStyleVar_ChildRounding, 12.0f);
-        ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 1.0f);
-        ImGui::PushStyleColor(ImGuiCol_Border, ImVec4(0.5f, 0.1f, 0.1f, 0.5f)); // Borde rojo sutil
-
-        if (ImGui::BeginChild("AdminPanel", ImVec2(panelW, panelH), true)) 
-        {
-            // --- HEADER ---
-            ImGui::SetCursorPos(ImVec2(25, 25));
-            ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.0f, 0.0f, 0.0f, 0.0f)); // Botón invisible
-            ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.4f, 0.45f, 0.55f, 1.0f));
-            if (ImGui::Button("< RETURN TO NEXUS", ImVec2(150, 30))) 
-            {
-                currentState = AppState::MainScreen;
-            }
-            ImGui::PopStyleColor(2);
-
-            ImGui::SameLine(panelW - 200);
-            ImGui::SetCursorPosY(30);
-            ImGui::TextColored(ImVec4(1.0f, 0.3f, 0.3f, 1.0f), "ROOT COMMAND CENTER");
-            
-            ImGui::SetCursorPosX(25);
-            ImGui::Separator();
-
-            // --- SISTEMA DE PESTAÑAS CUSTOM ---
-            ImGui::SetCursorPos(ImVec2(25, 70));
-            
-            // Estilizar pestañas para que parezcan flat design
-            ImGui::PushStyleColor(ImGuiCol_TabActive, ImVec4(0.85f, 0.27f, 0.94f, 0.8f)); // Magenta
-            ImGui::PushStyleColor(ImGuiCol_TabHovered, ImVec4(0.85f, 0.27f, 0.94f, 0.4f));
-            ImGui::PushStyleColor(ImGuiCol_Tab, ImVec4(0.08f, 0.08f, 0.12f, 1.0f));
-            ImGui::PushStyleVar(ImGuiStyleVar_TabRounding, 4.0f);
-
-            if (ImGui::BeginTabBar("AdminTabs", ImGuiTabBarFlags_None)) 
-            {
-                // ==========================================
-                // PESTAÑA 1: GESTIÓN DE NODOS (Usuarios)
-                // ==========================================
-                if (ImGui::BeginTabItem("  ACTIVE NODES  ")) 
-                {
-                    ImGui::Spacing(); ImGui::Spacing();
-                    
-                    // Controles Superiores (Toolbar)
-                    ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, 4.0f);
-                    
-                    ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.15f, 0.15f, 0.22f, 1.0f));
-                    if (ImGui::Button("REFRESH DATA", ImVec2(150, 35))) FetchUsersFromDB();
-                    
-                    ImGui::SameLine();
-                    if (ImGui::Button("UNLOCK HWID...", ImVec2(150, 35))) 
-                    {
-                        showHwidResetModal = true;
-                        memset(hwidResetTarget, 0, sizeof(hwidResetTarget));
-                    }
-                    ImGui::PopStyleColor();
-                    ImGui::PopStyleVar(); // FrameRounding
-
-                    ImGui::Spacing(); ImGui::Spacing();
-                    
-                    // Lista Scrolleable de Nodos
-                    ImGui::PushStyleColor(ImGuiCol_ChildBg, ImVec4(0.02f, 0.02f, 0.03f, 1.0f));
-                    if (ImGui::BeginChild("UsersList", ImVec2(0, panelH - 200), true)) 
-                    {
-                        if (cachedUsers.empty()) 
-                        {
-                            ImGui::SetCursorPosY(50);
-                            ImGui::SetCursorPosX((panelW - 250) * 0.5f);
-                            ImGui::TextColored(ImVec4(0.4f, 0.45f, 0.55f, 1.0f), "NO ACTIVE NODES. CLICK REFRESH.");
-                        } 
-                        else 
-                        {
-                            // Animación global para los LEDs de estado
-                            static float time = 0.0f;
-                            time += ImGui::GetIO().DeltaTime * 3.0f;
-                            float ledPulse = (sin(time) * 0.5f) + 0.5f; 
-
-                            for (size_t i = 0; i < cachedUsers.size(); i++) 
-                            {
-                                auto& u = cachedUsers[i];
-                                ImGui::PushID((int)i);
-                                
-                                // Tarjeta de Nodo Individual
-                                ImGui::PushStyleColor(ImGuiCol_ChildBg, ImVec4(0.06f, 0.06f, 0.08f, 1.0f));
-                                ImGui::BeginChild("UserCard", ImVec2(0, 55), true);
-                                
-                                // 1. Nombre de usuario
-                                ImGui::SetCursorPos(ImVec2(15, 18));
-                                ImGui::TextColored(ImVec4(0.9f, 0.9f, 0.95f, 1.0f), "%s", u.username.c_str());
-
-                                // 2. Estado de HWID (Indicador LED)
-                                ImGui::SameLine(180);
-                                ImGui::SetCursorPosY(18);
-                                
-                                ImVec4 ledColor;
-                                const char* statusText;
-                                if (u.hwid != "NONE") 
-                                {
-                                    ledColor = ImVec4(1.0f, 0.2f, 0.2f, 0.5f + (ledPulse * 0.5f)); // Rojo palpitante
-                                    statusText = "LOCKED";
-                                } 
-                                else 
-                                {
-                                    ledColor = ImVec4(0.0f, 1.0f, 0.5f, 0.8f); // Verde fijo
-                                    statusText = "READY";
-                                }
-                                
-                                ImDrawList* drawList = ImGui::GetWindowDrawList();
-                                ImVec2 p = ImGui::GetCursorScreenPos();
-                                drawList->AddCircleFilled(ImVec2(p.x + 5, p.y + 6), 4.0f, ImGui::ColorConvertFloat4ToU32(ledColor));
-                                
-                                ImGui::SetCursorPosX(ImGui::GetCursorPosX() + 15);
-                                ImGui::TextColored(ledColor, statusText);
-
-                                // 3. Selector de Membresía
-                                ImGui::SameLine(320);
-                                ImGui::SetCursorPosY(14);
-                                const char* plans[] = { "Weekly", "Monthly", "Yearly", "Lifetime" };
-                                int currentPlanIndex = 0;
-                                for (int p = 0; p < 4; p++) { if (u.plan == plans[p]) currentPlanIndex = p; }
-                                
-                                ImGui::PushItemWidth(130);
-                                ImGui::PushStyleColor(ImGuiCol_FrameBg, ImVec4(0.03f, 0.03f, 0.04f, 1.0f));
-                                if (ImGui::Combo("##plan", &currentPlanIndex, plans, IM_ARRAYSIZE(plans))) 
-                                {
-                                    auto res = Auth::ApiClient::UpdateMembership(u.username, plans[currentPlanIndex]);
-                                    if (res.success) FetchUsersFromDB();
-                                    else ShowAlert("ERROR", res.message, true);
-                                }
-                                ImGui::PopStyleColor();
-                                ImGui::PopItemWidth();
-
-                                // 4. Botón de Purga (Eliminar)
-                                ImGui::SameLine(ImGui::GetWindowWidth() - 100);
-                                ImGui::SetCursorPosY(12);
-                                
-                                ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.2f, 0.05f, 0.05f, 1.0f));
-                                ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.8f, 0.1f, 0.1f, 1.0f));
-                                ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(1.0f, 0.2f, 0.2f, 1.0f));
-                                ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.0f, 0.5f, 0.5f, 1.0f));
-                                
-                                if (ImGui::Button("PURGE", ImVec2(80, 30))) 
-                                {
-                                    userToDelete = u.username;
-                                    showDeleteModal = true;
-                                }
-                                ImGui::PopStyleColor(4);
-
-                                ImGui::EndChild();
-                                ImGui::PopStyleColor(); // ChildBg de la tarjeta
-                                ImGui::PopID();
-                            }
-                        }
-                    }
-                    ImGui::EndChild();
-                    ImGui::PopStyleColor(); // ChildBg de la lista
-                    
-                    ImGui::EndTabItem();
-                }
-
-                // ==========================================
-                // PESTAÑA 2: LICENSE FORGE (Generador)
-                // ==========================================
-                if (ImGui::BeginTabItem("  LICENSE FORGE  ")) 
-                {
-                    ImGui::Spacing(); ImGui::Spacing();
-                    
-                    // Contenedor para el generador
-                    ImGui::PushStyleColor(ImGuiCol_ChildBg, ImVec4(0.06f, 0.06f, 0.08f, 1.0f));
-                    ImGui::BeginChild("MintControl", ImVec2(0, 180), true);
-                    
-                    ImGui::SetCursorPos(ImVec2(20, 20));
-                    ImGui::TextColored(ImVec4(0.85f, 0.27f, 0.94f, 1.0f), "MINTING PROTOCOL");
-                    
-                    ImGui::SetCursorPos(ImVec2(20, 60));
-                    ImGui::Text("TIER SELECTION:");
-                    ImGui::SameLine(180);
-                    const char* plans[] = { "Weekly", "Monthly", "Yearly", "Lifetime" };
-                    ImGui::PushItemWidth(200);
-                    ImGui::Combo("##mintTier", &keyTierIndex, plans, IM_ARRAYSIZE(plans));
-                    
-                    ImGui::SetCursorPos(ImVec2(20, 100));
-                    ImGui::Text("QUANTITY:");
-                    ImGui::SameLine(180);
-                    ImGui::InputInt("##mintAmt", &keyAmount);
-                    if (keyAmount < 1) keyAmount = 1;
-                    if (keyAmount > 100) keyAmount = 100; 
-                    ImGui::PopItemWidth();
-
-                    // Botón Ejecutar Minting
-                    ImGui::SetCursorPos(ImVec2(420, 60));
-                    ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.6f, 0.1f, 0.8f, 0.8f)); // Magenta oscuro
-                    ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.85f, 0.27f, 0.94f, 1.0f));
-                    if (ImGui::Button("MINT LICENSES", ImVec2(200, 65))) 
-                    {
-                        auto res = Auth::ApiClient::GenerateKey(plans[keyTierIndex], keyAmount);
-                        if (res.success) 
-                        {
-                            generatedKeysOutput.clear();
-                            for (const auto& k : res.keys) 
-                            {
-                                generatedKeysOutput += k + "\n";
-                            }
-                        } 
-                        else 
-                        {
-                            ShowAlert("ERROR", "Minting sequence failed.", true);
-                        }
-                    }
-                    ImGui::PopStyleColor(2);
-
-                    ImGui::EndChild();
-                    ImGui::PopStyleColor();
-
-                    ImGui::Spacing();
-                    
-                    // Caja de salida (Consola de llaves)
-                    ImGui::TextColored(ImVec4(0.4f, 0.45f, 0.55f, 1.0f), "OUTPUT BUFFER:");
-                    ImGui::PushStyleColor(ImGuiCol_FrameBg, ImVec4(0.02f, 0.02f, 0.03f, 1.0f));
-                    ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.15f, 0.85f, 0.95f, 1.0f)); // Texto cian para las llaves
-                    ImGui::InputTextMultiline("##keyOutput", (char*)generatedKeysOutput.c_str(), generatedKeysOutput.capacity() + 1, ImVec2(-1, -1), ImGuiInputTextFlags_ReadOnly);
-                    ImGui::PopStyleColor(2);
-                    
-                    ImGui::EndTabItem();
-                }
-                
-                ImGui::EndTabBar();
-            }
-            
-            // Limpieza de colores de las pestañas
-            ImGui::PopStyleVar();
-            ImGui::PopStyleColor(3);
-
-            // --- MODALES DEL ADMIN (No requieren cambios estéticos mayores por ahora) ---
-            ImVec2 center = ImGui::GetMainViewport()->GetCenter();
-
-            if (showHwidResetModal) ImGui::OpenPopup("HWID Override");
-            ImGui::SetNextWindowPos(center, ImGuiCond_Appearing, ImVec2(0.5f, 0.5f));
-            if (ImGui::BeginPopupModal("HWID Override", &showHwidResetModal, ImGuiWindowFlags_AlwaysAutoResize)) 
-            {
-                ImGui::TextColored(ImVec4(0.15f, 0.85f, 0.95f, 1.0f), "TARGET USERNAME:");
-                ImGui::InputText("##hwidTarget", hwidResetTarget, IM_ARRAYSIZE(hwidResetTarget));
-                ImGui::Spacing();
-                
-                if (ImGui::Button("FORCE UNLOCK", ImVec2(120, 35))) 
-                {
-                    auto res = Auth::ApiClient::ResetHwid(hwidResetTarget);
-                    if (res.success) FetchUsersFromDB();
-                    else ShowAlert("ERROR", res.message, true);
-                    showHwidResetModal = false;
-                }
-                ImGui::SameLine();
-                if (ImGui::Button("ABORT", ImVec2(120, 35))) showHwidResetModal = false;
-                ImGui::EndPopup();
-            }
-
-            if (showDeleteModal) ImGui::OpenPopup("Confirm Purge");
-            ImGui::SetNextWindowPos(center, ImGuiCond_Appearing, ImVec2(0.5f, 0.5f));
-            if (ImGui::BeginPopupModal("Confirm Purge", &showDeleteModal, ImGuiWindowFlags_AlwaysAutoResize)) 
-            {
-                ImGui::Text("Permanently erase node: ");
-                ImGui::SameLine();
-                ImGui::TextColored(ImVec4(1.0f, 0.3f, 0.3f, 1.0f), "%s?", userToDelete.c_str());
-                ImGui::Spacing();
-                
-                ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.8f, 0.1f, 0.1f, 1.0f));
-                if (ImGui::Button("EXECUTE PURGE", ImVec2(140, 35))) 
-                {
-                    auto res = Auth::ApiClient::DeleteUser(userToDelete);
-                    if (res.success) FetchUsersFromDB();
-                    else ShowAlert("ERROR", res.message, true);
-                    showDeleteModal = false;
-                }
-                ImGui::PopStyleColor();
-                
-                ImGui::SameLine();
-                if (ImGui::Button("ABORT", ImVec2(120, 35))) showDeleteModal = false;
-                ImGui::EndPopup();
-            }
-        }
-        
-        ImGui::EndChild();
-        ImGui::PopStyleVar(2);
-        ImGui::PopStyleColor(2);
-    }
-
-// ==========================================================
-    // BYPASS FRAME (GHOST PROTOCOL - CYBER 2026)
-    // ==========================================================
-    void Menu::OpenFileDialog() 
-    {
-        OPENFILENAMEW ofn;
-        wchar_t szFile[260] = { 0 };
-
-        ZeroMemory(&ofn, sizeof(ofn));
-        ofn.lStructSize = sizeof(ofn);
-        ofn.hwndOwner = NULL;
-        ofn.lpstrFile = szFile;
-        ofn.nMaxFile = sizeof(szFile);
-        ofn.lpstrFilter = L"Executables (*.exe)\0*.exe\0DLLs (*.dll)\0*.dll\0All Files (*.*)\0*.*\0";
-        ofn.nFilterIndex = 1;
-        ofn.lpstrFileTitle = NULL;
-        ofn.nMaxFileTitle = 0;
-        ofn.lpstrInitialDir = NULL;
-        ofn.Flags = OFN_PATHMUSTEXIST | OFN_FILEMUSTEXIST | OFN_NOCHANGEDIR;
-
-        if (GetOpenFileNameW(&ofn) == TRUE) 
-        {
-            targetPath = ofn.lpstrFile;
-            
-            std::lock_guard<std::mutex> lock(logMutex);
-            std::wstring filename = targetPath.substr(targetPath.find_last_of(L"/\\") + 1);
-            
-            int size_needed = WideCharToMultiByte(CP_UTF8, 0, &filename[0], (int)filename.size(), NULL, 0, NULL, NULL);
-            std::string strTo(size_needed, 0);
-            WideCharToMultiByte(CP_UTF8, 0, &filename[0], (int)filename.size(), &strTo[0], size_needed, NULL, NULL);
-            
-            consoleLogs.push_back("[>] SYS_LINK ESTABLISHED WITH: " + strTo);
-            consoleLogs.push_back("[>] AWAITING EXECUTION COMMAND...");
-        }
-    }
-
-    void Menu::RunBypassThread() 
-    {
-        auto logger = [](const std::string& msg) 
-        {
-            std::lock_guard<std::mutex> lock(logMutex); 
-            consoleLogs.push_back("[>] " + msg);        
         };
 
-        logger("INITIATING ULTRA-GOD-TIER ANTI-SS PROTOCOL...");
+        DrawEliteInput("OPERATIVE_ID", userBuffer, false, 190);
+        DrawEliteInput("SECURITY_KEY", passBuffer, true, 265);
 
-        // Llamada al motor maestro
-        Core::Cleaner::DeepCleanProcess(targetPath, logger);
+        static bool showRedeem = false;
+        if (showRedeem) DrawEliteInput("LICENSE_TOKEN", keyBuffer, false, 340);
+
+        // --- 6. BOTÓN DE ACCIÓN (LÓGICA MEJORADA) ---
+        float btnY = showRedeem ? 430.0f : 350.0f;
+        ImGui::SetCursorPos(ImVec2(40, btnY));
         
-        // Si el Deep Scan estaba activado en Ajustes, lo lanzamos ahora
-        if (deepScanEnabled) 
+        static float btnPulse = 0.0f;
+        btnPulse += dt * 2.0f;
+        float glowAnim = (sin(btnPulse) * 0.5f) + 0.5f;
+
+        ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, 10.0f);
+        ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.55f, 0.36f, 0.96f, 0.8f));
+        ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.60f, 0.40f, 1.0f, 1.0f));
+        
+        if (ImGui::Button(isConnecting ? "SYNCHRONIZING..." : "E X E C U T E  L O G I N", ImVec2(360, 60)) && !isConnecting) 
         {
-            logger("DEPLOYING DEEP REGISTRY SCANNERS...");
-            Core::Cleaner::DeepRegistrySearchCleaner(targetPath, logger);
+            isConnecting = true;
+            isLoginError = false;
+            loginStatus = "CONTACTING CORE...";
+
+            std::thread([&]() {
+                auto response = Auth::ApiClient::ValidateLogin(Menu::userBuffer, Menu::passBuffer);
+
+                if (response.success) {
+                    // --- LOG DE DIAGNÓSTICO (Mira tu consola de Visual Studio) ---
+                    printf("[AUTH] Raw Role Received: '%s'\n", response.role.c_str());
+
+                    // --- NORMALIZACIÓN AGRESIVA ---
+                    std::string r = response.role;
+                    // Pasar a minúsculas
+                    std::transform(r.begin(), r.end(), r.begin(), ::tolower);
+                    // Quitar espacios
+                    r.erase(std::remove_if(r.begin(), r.end(), ::isspace), r.end());
+
+                    // --- BÚSQUEDA FLEXIBLE ---
+                    // Si el string contiene "admin" o es exactamente "1", activamos Admin
+                    if (r.find("admin") != std::string::npos || r == "1") {
+                        Menu::isAdmin = true;
+                        printf("[AUTH] Admin Privileges: ENABLED\n");
+                    } else {
+                        Menu::isAdmin = false;
+                        printf("[AUTH] Admin Privileges: DISABLED\n");
+                    }
+
+                    Menu::loginStatus = "ACCESS GRANTED. INITIALIZING...";
+                    std::this_thread::sleep_for(std::chrono::milliseconds(800));
+                    Menu::currentState = AppState::MainScreen; 
+                } else {
+                    Menu::loginStatus = "DENIED: " + response.message;
+                    Menu::isLoginError = true;
+                }
+                Menu::isConnecting = false;
+            }).detach();
         }
 
-        logger("=========================================");
-        logger("SYSTEM SANITIZED FOR SS. TARGET ANNIHILATED.");
-        logger("=========================================");
-        
-        isWiping = false;
-        targetPath = L""; 
-    }
+        if (ImGui::IsItemHovered()) {
+            ImVec2 bMin = ImGui::GetItemRectMin();
+            ImVec2 bMax = ImGui::GetItemRectMax();
+            drawList->AddRect(bMin, bMax, IM_COL32(139, 92, 246, (int)(100 * glowAnim)), 10.0f, 0, 4.0f);
+        }
+        ImGui::PopStyleColor(2);
+        ImGui::PopStyleVar();
 
+        // --- 7. STATUS FEEDBACK ---
+        if (!loginStatus.empty()) {
+            ImGui::SetCursorPos(ImVec2(40, btnY + 75));
+            ImVec4 statusCol = isLoginError ? ImVec4(1.0f, 0.3f, 0.3f, 1.0f) : ImVec4(0.3f, 1.0f, 0.6f, 1.0f);
+            ImGui::TextColored(statusCol, "[>] %s", loginStatus.c_str());
+        }
+
+        // --- 8. FOOTER ---
+        ImGui::SetCursorPos(ImVec2(40, panelH - 50));
+        const char* toggleText = showRedeem ? "RETURN TO STANDARD AUTH" : "MINT NEW LICENSE ACCESS";
+        ImVec2 tSize = ImGui::CalcTextSize(toggleText);
+        
+        if (ImGui::Selectable(toggleText, false, 0, tSize)) {
+            showRedeem = !showRedeem;
+            Menu::loginStatus = "";
+        }
+        if (ImGui::IsItemHovered()) {
+            ImGui::SetMouseCursor(ImGuiMouseCursor_Hand);
+            ImVec2 min = ImGui::GetItemRectMin();
+            drawList->AddLine(min + ImVec2(0, tSize.y), min + tSize, IM_COL32(139, 92, 246, 200));
+        }
+    }
+    ImGui::End();
+}
+
+// ==========================================================
+// ADMIN FRAME (COMMAND CENTER ELITE - ADAPTATIVO 2026)
+// ==========================================================
+void Menu::DrawAdminFrame() 
+{
+    const ImGuiViewport* viewport = ImGui::GetMainViewport();
+    ImVec2 screenSize = viewport->WorkSize;
+
+    float panelW = screenSize.x * 0.94f; 
+    float panelH = screenSize.y * 0.90f;
+
+    ImGui::SetNextWindowPos(viewport->GetCenter(), ImGuiCond_Always, ImVec2(0.5f, 0.5f));
+    ImGui::SetNextWindowSize(ImVec2(panelW + 40, panelH + 40));
+
+    ImGuiWindowFlags flags = ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove | 
+                             ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoSavedSettings | 
+                             ImGuiWindowFlags_NoBackground;
+
+    if (ImGui::Begin("AdminMasterPanel", NULL, flags)) 
+    {
+        ImDrawList* drawList = ImGui::GetWindowDrawList();
+        ImVec2 p = ImGui::GetWindowPos() + ImVec2(20, 20);
+
+        // --- 1. AMBIENTE TÁCTICO (GLOW ROJO) ---
+        for (int i = 0; i < 15; i++)
+            drawList->AddRect(p - ImVec2((float)i, (float)i), p + ImVec2(panelW + i, panelH + i), 
+                              IM_COL32(255, 30, 30, 15 - i), 16.0f, 0, 1.5f);
+
+        drawList->AddRectFilled(p, p + ImVec2(panelW, panelH), IM_COL32(10, 10, 14, 252), 16.0f);
+        drawList->AddRect(p, p + ImVec2(panelW, panelH), IM_COL32(255, 255, 255, 10), 16.0f, 0, 1.0f);
+
+        // --- 2. HEADER ---
+        ImGui::SetCursorPos(ImVec2(40, 40));
+        ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(1, 1, 1, 0.05f));
+        if (ImGui::Button("< EXIT_ROOT", ImVec2(120, 35))) currentState = AppState::MainScreen;
+        ImGui::PopStyleColor(); // Pop de EXIT_ROOT
+
+        ImGui::SameLine(panelW - 350);
+        ImGui::SetCursorPosY(42);
+        ImGui::TextColored(ImVec4(1.0f, 0.2f, 0.25f, 1.0f), "[!] ADMINISTRATIVE_OVERRIDE_ACTIVE");
+
+        // --- 3. PESTAÑAS (PUSH DE ESTILOS DE BARRA) ---
+        ImGui::SetCursorPos(ImVec2(40, 100));
+        ImGui::PushStyleColor(ImGuiCol_TabActive, ImVec4(1.0f, 0.1f, 0.2f, 0.25f));
+        ImGui::PushStyleColor(ImGuiCol_TabHovered, ImVec4(1.0f, 0.1f, 0.2f, 0.15f));
+        ImGui::PushStyleColor(ImGuiCol_Tab, ImVec4(0, 0, 0, 0));
+        ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(25, 0));
+
+        if (ImGui::BeginTabBar("AdminTabs", ImGuiTabBarFlags_NoTooltip)) 
+        {
+            // --- TAB 1: DATABASE ---
+            if (ImGui::BeginTabItem("   DATABASE_NODES   ")) 
+            {
+                ImGui::SetCursorPosY(160);
+                ImGui::SetCursorPosX(40);
+                
+                if (ImGui::Button("RE-SYNC_DATABASE", ImVec2(180, 42))) FetchUsersFromDB();
+                ImGui::SameLine();
+                if (ImGui::Button("GLOBAL_HWID_RELEASE", ImVec2(180, 42))) showHwidResetModal = true;
+
+                ImGui::Dummy(ImVec2(0, 15));
+
+                ImGui::SetCursorPosX(40);
+                ImGui::PushStyleColor(ImGuiCol_ChildBg, ImVec4(1, 1, 1, 0.01f));
+                if (ImGui::BeginChild("ScrollableTable", ImVec2(panelW - 80, panelH - 280), true)) 
+                {
+                    ImGui::Columns(4, "NodeColumns", false);
+                    ImGui::SetColumnWidth(0, 250); 
+                    
+                    ImGui::TextColored(ImVec4(0.5f, 0.5f, 0.6f, 1.0f), "IDENTIFIER"); ImGui::NextColumn();
+                    ImGui::TextColored(ImVec4(0.5f, 0.5f, 0.6f, 1.0f), "HARDWARE"); ImGui::NextColumn();
+                    ImGui::TextColored(ImVec4(0.5f, 0.5f, 0.6f, 1.0f), "ACCESS_LEVEL"); ImGui::NextColumn();
+                    ImGui::TextColored(ImVec4(0.5f, 0.5f, 0.6f, 1.0f), "OPERATIONS"); ImGui::NextColumn();
+                    ImGui::Separator();
+
+                    for (size_t i = 0; i < cachedUsers.size(); i++) 
+                    {
+                        auto& u = cachedUsers[i];
+                        ImGui::PushID((int)i);
+                        
+                        ImGui::SetCursorPosY(ImGui::GetCursorPosY() + 10);
+                        ImGui::Text("%s", u.username.c_str()); ImGui::NextColumn();
+
+                        bool isLocked = (u.hwid != "NONE");
+                        ImVec4 statusCol = isLocked ? ImVec4(1, 0.1f, 0.1f, 1) : ImVec4(0, 1, 0.7f, 1);
+                        ImGui::TextColored(statusCol, isLocked ? "LOCKED" : "READY"); ImGui::NextColumn();
+
+                        ImGui::PushItemWidth(140);
+                        const char* plans[] = { "Weekly", "Monthly", "Yearly", "Lifetime" };
+                        int curIdx = 0; 
+                        for(int j=0; j<4; j++) if(u.plan == plans[j]) curIdx = j;
+                        
+                        if (ImGui::Combo("##p", &curIdx, plans, 4)) 
+                            Auth::ApiClient::UpdateMembership(u.username, plans[curIdx]);
+                        ImGui::PopItemWidth(); 
+                        ImGui::NextColumn();
+
+                        if (ImGui::Button("PURGE", ImVec2(80, 30))) { 
+                            userToDelete = u.username; 
+                            showDeleteModal = true; 
+                        }
+                        ImGui::NextColumn();
+
+                        ImGui::Separator();
+                        ImGui::PopID();
+                    }
+                }
+                ImGui::EndChild();
+                ImGui::PopStyleColor(); // Pop del ChildBg
+                ImGui::EndTabItem();
+            }
+
+            // --- TAB 2: FORGE ---
+            if (ImGui::BeginTabItem("   LICENSE_FORGE   ")) 
+            {
+                ImGui::SetCursorPos(ImVec2(60, 180));
+                ImGui::BeginGroup();
+                static int fTier = 0; static int fQty = 1;
+                const char* tiers[] = { "Weekly", "Monthly", "Yearly", "Lifetime" };
+                ImGui::PushItemWidth(320);
+                ImGui::Combo("TIER_TYPE", &fTier, tiers, 4);
+                ImGui::InputInt("QUANTITY", &fQty);
+                ImGui::PopItemWidth();
+
+                if (ImGui::Button("EXECUTE_MINT_PROTOCOL", ImVec2(320, 60))) {
+                    auto res = Auth::ApiClient::GenerateKey(tiers[fTier], fQty);
+                    if(res.success) {
+                        generatedKeysOutput.clear();
+                        for(const auto& k : res.keys) generatedKeysOutput += k + "\n";
+                    }
+                }
+                ImGui::EndGroup();
+
+                ImGui::SameLine(panelW - 540);
+                ImGui::BeginGroup();
+                ImGui::PushStyleColor(ImGuiCol_FrameBg, IM_COL32(5, 5, 10, 200));
+                ImGui::InputTextMultiline("##keys", (char*)generatedKeysOutput.c_str(), 8192, ImVec2(500, 350), ImGuiInputTextFlags_ReadOnly);
+                ImGui::PopStyleColor(); // Pop del FrameBg Multiline
+                ImGui::EndGroup();
+
+                ImGui::EndTabItem();
+            }
+            ImGui::EndTabBar();
+        }
+
+        // --- CIERRE DE STACK DE ESTILOS (Sincronizado con el principio de la función) ---
+        ImGui::PopStyleColor(3); // Pop de TabActive, Hovered y Tab
+        ImGui::PopStyleVar();    // Pop de ItemSpacing
+    }
+    ImGui::End(); // Fin de AdminMasterPanel
+}
+
+// ==========================================================|
+// MAIN FRAME (CORE CONTROL HUB - FUTURISTA 2026)            |   
+// ==========================================================|
+void Menu::DrawMainFrame() 
+{
+    const ImGuiViewport* viewport = ImGui::GetMainViewport();
+    ImVec2 center = viewport->GetCenter();
+    float dt = ImGui::GetIO().DeltaTime;
+
+    // --- LINEA DE DEBUG (F9) ---
+    if (ImGui::IsKeyPressed(ImGuiKey_F9)) Menu::isAdmin = !Menu::isAdmin;
+
+    // Dimensiones para layout horizontal
+    float panelW = 720.0f; 
+    float panelH = 460.0f; 
+
+    ImGui::SetNextWindowPos(center, ImGuiCond_Always, ImVec2(0.5f, 0.5f));
+    ImGui::SetNextWindowSize(ImVec2(panelW + 40, panelH + 40));
+
+    if (ImGui::Begin("MainSelector", NULL, ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoBackground)) 
+    {
+        ImDrawList* drawList = ImGui::GetWindowDrawList();
+        ImVec2 p = ImGui::GetWindowPos() + ImVec2(20, 20);
+
+        // --- 1. FONDO Y BORDE ---
+        drawList->AddRectFilled(p, p + ImVec2(panelW, panelH), IM_COL32(10, 10, 15, 252), 12.0f);
+        ImU32 accentCol = Menu::isAdmin ? IM_COL32(255, 50, 50, 200) : IM_COL32(139, 92, 246, 120);
+        drawList->AddRect(p, p + ImVec2(panelW, panelH), accentCol, 12.0f, 0, 2.0f);
+
+        // --- 2. LOGO PNG CENTRADO ---
+        float imgSize = 160.0f;
+        // Calculamos el centro exacto del panel para la imagen
+        ImVec2 imgPos = ImVec2(p.x + (panelW / 2.0f) - (imgSize / 2.0f), p.y + 90);
+
+        if (Menu::logoTexture != nullptr) {
+            // Dibujamos el Scanneler.png real
+            drawList->AddImage((void*)Menu::logoTexture, imgPos, imgPos + ImVec2(imgSize, imgSize));
+        } else {
+            // Placeholder si la imagen no carga (Círculo estético)
+            drawList->AddCircle(imgPos + ImVec2(imgSize/2, imgSize/2), imgSize/2, accentCol, 100, 1.5f);
+            drawList->AddText(NULL, 18.0f, imgPos + ImVec2(imgSize/4, imgSize/2.2f), IM_COL32(255, 255, 255, 50), "NO_LOGO");
+        }
+
+        // --- 3. HEADER TITULO ---
+        const char* title = "S C A N N E L E R   C O R E";
+        ImVec2 titleSize = ImGui::CalcTextSize(title);
+        ImGui::SetCursorPos(ImVec2((panelW - titleSize.x) / 2.0f + 20, 50));
+        ImGui::PushFont(ImGui::GetIO().Fonts->Fonts[0]);
+        ImGui::TextColored(ImVec4(1, 1, 1, 0.8f), title);
+        ImGui::PopFont();
+        
+        // Separador sutil bajo el logo
+        drawList->AddLine(p + ImVec2(panelW * 0.2f, 270), p + ImVec2(panelW * 0.8f, 270), IM_COL32(255, 255, 255, 15));
+
+        // --- 4. BOTONES HORIZONTALES (BARRA INFERIOR) ---
+        float btnW = 190.0f;
+        float btnH = 50.0f;
+        float spacing = 20.0f;
+        
+        // Cálculo de centrado dinámico para los botones
+        int totalBtns = Menu::isAdmin ? 3 : 2;
+        float totalWidth = (btnW * totalBtns) + (spacing * (totalBtns - 1));
+        float startX = (panelW - totalWidth) / 2.0f + 20;
+
+        ImGui::SetCursorPos(ImVec2(startX, panelH - 90));
+
+        // [BOTÓN 1: GHOST]
+        if (ImGui::Button("GHOST PROTOCOL", ImVec2(btnW, btnH))) {
+            currentState = AppState::BypassScreen;
+        }
+
+        ImGui::SameLine(0, spacing);
+
+        // [BOTÓN 2: ADMIN]
+        if (Menu::isAdmin) 
+        {
+            ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.8f, 0.1f, 0.15f, 0.2f));
+            if (ImGui::Button("ADMIN PANEL", ImVec2(btnW, btnH))) {
+                FetchUsersFromDB(); 
+                currentState = AppState::AdminScreen;
+            }
+            ImGui::PopStyleColor();
+            ImGui::SameLine(0, spacing);
+        }
+
+        // [BOTÓN 3: SETTINGS]
+        if (ImGui::Button("SETTINGS", ImVec2(btnW, btnH))) {
+            showSettings = true;
+        }
+
+        // --- 5. LOGOUT (ESTILO TERMINAL ABAJO) ---
+        ImGui::SetCursorPos(ImVec2(20, panelH - 25));
+        ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.5f, 0.5f, 0.5f, 1.0f));
+        if (ImGui::Selectable("SYS_LOGOUT", false, 0, ImGui::CalcTextSize("SYS_LOGOUT"))) {
+            Menu::isAdmin = false; 
+            Menu::currentState = AppState::LoginScreen;
+        }
+        ImGui::PopStyleColor();
+        
+        if (ImGui::IsItemHovered()) ImGui::SetMouseCursor(ImGuiMouseCursor_Hand);
+    }
+    ImGui::End();
+
+    if (showSettings) DrawSettingsFrame();
+}
+
+// ==========================================================
+// SETTINGS FRAME (MODAL OVERLAY)
+// ==========================================================
+void Menu::DrawSettingsFrame() 
+{
+    ImGui::OpenPopup("SystemSettings");
+    ImVec2 center = ImGui::GetMainViewport()->GetCenter();
+    ImGui::SetNextWindowPos(center, ImGuiCond_Always, ImVec2(0.5f, 0.5f));
+    ImGui::SetNextWindowSize(ImVec2(450, 400));
+
+    ImGui::PushStyleColor(ImGuiCol_PopupBg, IM_COL32(15, 15, 20, 255));
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 12.0f);
+
+    if (ImGui::BeginPopupModal("SystemSettings", &showSettings, ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize)) 
+    {
+        ImDrawList* drawList = ImGui::GetWindowDrawList();
+        ImVec2 p = ImGui::GetWindowPos();
+        ImVec2 s = ImGui::GetWindowSize();
+
+        drawList->AddText(NULL, 22.0f, p + ImVec2(30, 25), IM_COL32(139, 92, 246, 255), "CONFIG_SYSTEM");
+        ImGui::SetCursorPosY(70);
+
+        // --- SECCIÓN: IDIOMA ---
+        ImGui::Indent(20);
+        ImGui::TextColored(ImVec4(1, 1, 1, 0.5f), "LANGUAGE_REGION");
+        const char* langs[] = { "ENGLISH", "ESPAÑOL" };
+        int curLangIdx = (currentLang == "EN") ? 0 : 1;
+        
+        ImGui::PushItemWidth(370);
+        if (ImGui::Combo("##lang", &curLangIdx, langs, 2)) {
+            currentLang = (curLangIdx == 0) ? "EN" : "ES";
+        }
+        ImGui::PopItemWidth();
+
+        ImGui::Dummy(ImVec2(0, 20));
+
+        // --- SECCIÓN: HOTKEYS ---
+        ImGui::TextColored(ImVec4(1, 1, 1, 0.5f), "EMERGENCY_BYPASS_HOTKEY");
+        
+        std::string btnText = isBindingHotkey ? "< PRESS ANY KEY >" : GetKeyName(bypassHotkey);
+        if (ImGui::Button(btnText.c_str(), ImVec2(370, 45))) {
+            isBindingHotkey = true;
+        }
+
+        // Lógica para capturar la tecla
+        if (isBindingHotkey) {
+            for (int i = 0; i < 512; i++) {
+                if (GetAsyncKeyState(i) & 0x8000) {
+                    if (i != VK_LBUTTON && i != VK_RBUTTON) {
+                        bypassHotkey = i;
+                        isBindingHotkey = false;
+                        break;
+                    }
+                }
+            }
+        }
+
+        ImGui::Dummy(ImVec2(0, 20));
+
+        // --- SECCIÓN: OPCIONES DE ESCANEO ---
+        ImGui::Checkbox("ENABLE_DEEP_KERNEL_CLEAN", &deepScanEnabled);
+        ImGui::TextWrapped("Deep scan removes registry keys that standard methods might miss.");
+
+        // Botón de Cierre
+        ImGui::SetCursorPos(ImVec2(30, s.y - 65));
+        if (ImGui::Button("SAVE & EXIT", ImVec2(390, 45))) {
+            showSettings = false;
+            ImGui::CloseCurrentPopup();
+        }
+
+        ImGui::EndPopup();
+    }
+    ImGui::PopStyleVar();
+    ImGui::PopStyleColor();
+}
+
+
+
+// ==========================================================
+    // BYPASS FRAME (GHOST PROTOCOL ELITE - ADAPTATIVO 2026)
+    // ==========================================================
     void Menu::DrawBypassFrame() 
     {
-        ImVec2 winSize = ImGui::GetWindowSize();
+        // FIX DE CONTEXTO: Aseguramos la persistencia de la instancia
         
-        // Panel expansivo (ocupa más espacio para dar protagonismo a la terminal)
-        float panelW = winSize.x * 0.90f;
-        float panelH = winSize.y * 0.90f;
-        ImGui::SetCursorPos(ImVec2((winSize.x - panelW) * 0.5f, (winSize.y - panelH) * 0.5f));
+        const ImGuiViewport* viewport = ImGui::GetMainViewport();
+        ImVec2 screenSize = viewport->WorkSize;
+        float dt = ImGui::GetIO().DeltaTime;
+        
+        float panelW = screenSize.x * 0.94f;
+        float panelH = screenSize.y * 0.90f;
 
-        // Estilo visual del panel: Fondo Obsidiana con borde Violeta neón
-        ImGui::PushStyleColor(ImGuiCol_ChildBg, ImVec4(0.04f, 0.04f, 0.06f, 0.95f)); 
-        ImGui::PushStyleVar(ImGuiStyleVar_ChildRounding, 12.0f);
-        ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 1.0f);
-        ImGui::PushStyleColor(ImGuiCol_Border, ImVec4(0.55f, 0.36f, 0.96f, 0.5f));
+        ImGui::SetNextWindowPos(viewport->GetCenter(), ImGuiCond_Always, ImVec2(0.5f, 0.5f));
+        ImGui::SetNextWindowSize(ImVec2(panelW + 40, panelH + 40));
 
-        if (ImGui::BeginChild("BypassPanel", ImVec2(panelW, panelH), true)) 
+        if (ImGui::Begin("BypassMasterPanel", NULL, ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoBackground)) 
         {
-            // --- HEADER ---
-            ImGui::SetCursorPos(ImVec2(25, 25));
-            ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.0f, 0.0f, 0.0f, 0.0f)); 
-            ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.4f, 0.45f, 0.55f, 1.0f));
-            
-            if (ImGui::Button("< ABORT PROTOCOL", ImVec2(150, 30)) && !isWiping) 
-            {
-                consoleLogs.clear();
-                targetPath = L"";
-                currentState = AppState::MainScreen; 
-            }
-            ImGui::PopStyleColor(2);
+            ImDrawList* drawList = ImGui::GetWindowDrawList();
+            ImVec2 p = ImGui::GetWindowPos() + ImVec2(20, 20);
 
-            ImGui::SameLine(panelW - 220);
-            ImGui::SetCursorPosY(30);
-            ImGui::TextColored(ImVec4(0.85f, 0.27f, 0.94f, 1.0f), "GHOST PROTOCOL v3.0"); // Magenta
-            
-            ImGui::SetCursorPosX(25);
-            ImGui::Separator();
+            // --- 1. FONDO TÁCTICO CON GLOW ---
+            drawList->AddRectFilled(p, p + ImVec2(panelW, panelH), IM_COL32(10, 10, 15, 252), 12.0f);
+            drawList->AddRect(p, p + ImVec2(panelW, panelH), IM_COL32(139, 92, 246, 60), 12.0f, 0, 1.5f);
 
-            // --- SECCIÓN 1: SELECCIÓN DEL OBJETIVO ---
-            ImGui::SetCursorPosY(70);
-            ImGui::SetCursorPosX(30);
-            ImGui::TextColored(ImVec4(0.4f, 0.45f, 0.55f, 1.0f), "TARGET IDENTIFICATION:");
+            // --- 2. HEADER DINÁMICO ---
+            ImGui::SetCursorPos(ImVec2(40, 40));
+            ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(1, 1, 1, 0.05f));
+            if (ImGui::Button("< ABORT", ImVec2(100, 35)) && !isWiping) currentState = AppState::MainScreen;
+            ImGui::PopStyleColor();
 
-            ImGui::SetCursorPosY(95);
-            ImGui::SetCursorPosX(30);
+            ImGui::SameLine(panelW - 320);
+            float pulse = (sin(ImGui::GetTime() * 3.0f) * 0.5f) + 0.5f;
+            ImGui::TextColored(ImVec4(0.55f, 0.36f, 0.96f, 0.5f + pulse * 0.5f), "[ STATUS: GHOST_PROTOCOL_ACTIVE ]");
+
+            // --- 3. TARGET IDENTIFICATION (GLASS CARD) ---
+            ImGui::SetCursorPos(ImVec2(40, 100));
+            ImVec2 cardSize(panelW - 80, 80);
+            ImVec2 cardP = ImGui::GetCursorScreenPos();
             
-            // Si no hay archivo, mostramos el botón. Si hay, mostramos la ruta.
+            drawList->AddRectFilled(cardP, cardP + cardSize, IM_COL32(255, 255, 255, 5), 8.0f);
+            drawList->AddRect(cardP, cardP + cardSize, IM_COL32(255, 255, 255, 10), 8.0f);
+
             if (targetPath.empty()) 
             {
-                ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.08f, 0.08f, 0.12f, 1.0f));
-                ImGui::PushStyleColor(ImGuiCol_Border, ImVec4(0.55f, 0.36f, 0.96f, 1.0f));
-                ImGui::PushStyleVar(ImGuiStyleVar_FrameBorderSize, 1.0f);
-                ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, 4.0f);
-                
-                if (ImGui::Button("BROWSE FOR TARGET BINARY (.EXE / .DLL)", ImVec2(panelW - 60, 45)) && !isWiping) 
-                {
-                    OpenFileDialog(); 
-                }
-                
-                ImGui::PopStyleVar(2);
-                ImGui::PopStyleColor(2);
+                ImGui::SetCursorPos(ImVec2(60, 120));
+                ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.55f, 0.36f, 0.96f, 0.15f));
+                if (ImGui::Button("S E L E C T   T A R G E T   B I N A R Y", ImVec2(cardSize.x - 40, 40))) OpenFileDialog();
+                ImGui::PopStyleColor();
             } 
             else 
             {
-                // Caja que muestra el archivo cargado
-                ImGui::PushStyleColor(ImGuiCol_ChildBg, ImVec4(0.02f, 0.02f, 0.03f, 1.0f));
-                ImGui::PushStyleColor(ImGuiCol_Border, ImVec4(0.0f, 1.0f, 0.5f, 0.6f)); // Borde verde
-                ImGui::PushStyleVar(ImGuiStyleVar_ChildRounding, 4.0f);
-                ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 1.0f);
+                std::wstring wFile = targetPath.substr(targetPath.find_last_of(L"/\\") + 1);
+                std::string filename;
+                for (wchar_t wc : wFile) filename += (wc > 127) ? '?' : (char)wc;
                 
-                if (ImGui::BeginChild("TargetLockedBox", ImVec2(panelW - 60, 45), true))
-                {
-                    ImGui::SetCursorPos(ImVec2(15, 14));
-                    ImGui::TextColored(ImVec4(0.0f, 1.0f, 0.5f, 1.0f), "[LOCKED]");
-                    
-                    std::wstring wFilename = targetPath.substr(targetPath.find_last_of(L"/\\") + 1);
-                    int size_needed = WideCharToMultiByte(CP_UTF8, 0, &wFilename[0], (int)wFilename.size(), NULL, 0, NULL, NULL);
-                    std::string strFilename(size_needed, 0);
-                    WideCharToMultiByte(CP_UTF8, 0, &wFilename[0], (int)wFilename.size(), &strFilename[0], size_needed, NULL, NULL);
+                ImGui::SetCursorPos(ImVec2(60, 128));
+                ImGui::TextColored(ImVec4(0, 1, 0.6f, 1), "[ TARGET_LOCKED ] >> %s", filename.c_str());
 
-                    ImGui::SameLine();
-                    ImGui::Text(" %s", strFilename.c_str());
-
-                    // Botón para cancelar la selección
-                    ImGui::SameLine(ImGui::GetWindowWidth() - 40);
-                    ImGui::SetCursorPosY(12);
-                    ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.0f, 0.2f, 0.2f, 1.0f));
-                    if (ImGui::Button("X", ImVec2(25, 25)) && !isWiping) 
-                    {
-                        targetPath = L"";
-                        consoleLogs.push_back("[!] TARGET DISENGAGED.");
-                    }
-                    ImGui::PopStyleColor();
-                }
-                ImGui::EndChild();
-                ImGui::PopStyleVar(2);
-                ImGui::PopStyleColor(2);
+                ImGui::SameLine(cardSize.x - 40);
+                if (ImGui::Button("X", ImVec2(30, 30)) && !isWiping) targetPath = L"";
             }
 
-            // --- SECCIÓN 2: CONSOLA DE DIAGNÓSTICO TÁCTICO ---
-            ImGui::SetCursorPosY(160);
-            ImGui::SetCursorPosX(30);
-            ImGui::TextColored(ImVec4(0.4f, 0.45f, 0.55f, 1.0f), "EXECUTION LOGS:");
+            // --- 4. CONSOLA DE LOGS (NEURAL STREAM) ---
+            ImGui::SetCursorPos(ImVec2(40, 200));
+            ImGui::TextColored(ImVec4(0.45f, 0.5f, 0.6f, 1.0f), "LIVE_EXECUTION_FEED:");
 
-            ImGui::SetCursorPosY(185);
-            ImGui::SetCursorPosX(30);
+            ImGui::SetCursorPos(ImVec2(40, 230));
+            ImGui::PushStyleColor(ImGuiCol_ChildBg, IM_COL32(5, 5, 10, 200));
             
-            // Fondo de la consola (Negro puro con ligero tinte azul)
-            ImGui::PushStyleColor(ImGuiCol_ChildBg, ImVec4(0.01f, 0.01f, 0.015f, 1.0f));
-            // Texto de la consola (Cian Matrix)
-            ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.15f, 0.85f, 0.95f, 1.0f));
-            ImGui::PushStyleVar(ImGuiStyleVar_ChildRounding, 4.0f);
-            
-            if (ImGui::BeginChild("LogConsole", ImVec2(panelW - 60, panelH - 310), true, ImGuiWindowFlags_AlwaysVerticalScrollbar)) 
+            if (ImGui::BeginChild("LogStream", ImVec2(panelW - 80, panelH - 350), true, ImGuiWindowFlags_AlwaysVerticalScrollbar)) 
             {
-                ImGui::Spacing();
-                std::lock_guard<std::mutex> lock(logMutex);
-                for (const auto& log : consoleLogs) 
+                std::lock_guard<std::mutex> lock(logMutex); // Eliminado el this->
+                size_t logCount = consoleLogs.size();       // Eliminado el this->
+                for (size_t i = 0; i < logCount; i++) 
                 {
-                    ImGui::SetCursorPosX(15);
-                    // Colorear errores o advertencias en rojo
-                    if (log.find("[!]") != std::string::npos || log.find("ERROR") != std::string::npos) {
-                        ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.0f, 0.3f, 0.3f, 1.0f));
-                        ImGui::TextWrapped("%s", log.c_str());
-                        ImGui::PopStyleColor();
-                    } else {
-                        ImGui::TextWrapped("%s", log.c_str());
-                    }
+                    float alpha = (float)(i + 1) / (float)logCount;
+                    if (alpha < 0.3f) alpha = 0.3f; // No dejar que el texto sea invisible
+
+                    // Eliminado el this-> de consoleLogs
+                    ImVec4 logCol = (consoleLogs[i].find("[!]") != std::string::npos || consoleLogs[i].find("[-]") != std::string::npos) ? ImVec4(1, 0.3f, 0.3f, 1) : ImVec4(0.3f, 0.9f, 1, alpha);
+                    ImGui::TextColored(logCol, "%s", consoleLogs[i].c_str());
                 }
                 
-                // Auto-scroll automático cuando se añaden líneas
-                if (ImGui::GetScrollY() >= ImGui::GetScrollMaxY()) 
-                {
-                    ImGui::SetScrollHereY(1.0f);
-                }
-
-                ImGui::EndChild();
+                // Auto-scroll inteligente: Solo si estamos al final
+                if (ImGui::GetScrollY() >= ImGui::GetScrollMaxY()) ImGui::SetScrollHereY(1.0f);
             }
-            ImGui::PopStyleVar();
-            ImGui::PopStyleColor(2);
+            ImGui::EndChild();
+            ImGui::PopStyleColor();
 
-            // --- SECCIÓN 3: BOTÓN DE EJECUCIÓN (WIPE) ---
-            ImGui::SetCursorPosY(panelH - 100);
-            ImGui::SetCursorPosX(30);
-            
-            ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, 6.0f);
+            // --- 5. BOTONES DE ACCIÓN (ACTUALIZADO: ENJAMBRE MULTIHILO) ---
+            ImGui::SetCursorPos(ImVec2(40, panelH - 90));
+            float btnW = (panelW - 100) * 0.78f;
+            float kamW = (panelW - 100) * 0.22f;
 
             if (isWiping) 
             {
-                // Estado en progreso: Botón oscurecido
-                ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.2f, 0.1f, 0.3f, 1.0f));
-                ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.6f, 0.6f, 0.7f, 1.0f));
-                ImGui::Button("W I P I N G   I N   P R O G R E S S . . .", ImVec2(panelW - 60, 70));
-                ImGui::PopStyleColor(2);
+                ImGui::Button("P R O T O C O L   I N   P R O G R E S S . . .", ImVec2(btnW, 65));
+                ImVec2 bMin = ImGui::GetItemRectMin();
+                ImVec2 bMax = ImGui::GetItemRectMax();
+                float barPos = (sin(ImGui::GetTime() * 2.5f) * 0.5f) + 0.5f;
+                drawList->AddRectFilled(ImVec2(bMin.x, bMax.y - 3), ImVec2(bMin.x + (btnW * barPos), bMax.y), IM_COL32(0, 255, 255, 255));
             } 
             else 
             {
-                // Estado listo: Botón Rojo Peligro si hay objetivo, Gris si no hay
-                if (targetPath.empty()) 
+                ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.55f, 0.36f, 0.96f, targetPath.empty() ? 0.1f : 0.4f));
+                if (ImGui::Button("E X E C U T E   B Y P A S S   S E Q U E N C E", ImVec2(btnW, 65)) && !targetPath.empty()) 
                 {
-                    ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.1f, 0.1f, 0.15f, 1.0f));
-                    ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.15f, 0.15f, 0.22f, 1.0f));
-                    ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(0.1f, 0.1f, 0.15f, 1.0f));
-                    ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.4f, 0.45f, 0.55f, 1.0f));
-                } 
-                else 
-                {
-                    ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.8f, 0.1f, 0.2f, 0.9f)); // Rojo intenso
-                    ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(1.0f, 0.2f, 0.3f, 1.0f));
-                    ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(0.6f, 0.05f, 0.1f, 1.0f));
-                    ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.0f, 1.0f, 1.0f, 1.0f));
-                }
+                    isWiping = true;
+                    std::wstring currentTarget = targetPath; // Copia local para el hilo
 
-                if (ImGui::Button("E X E C U T E   N E U R A L   B Y P A S S", ImVec2(panelW - 60, 70))) 
-                {
-                    if (targetPath.empty()) 
-                    {
-                        ShowAlert("SYSTEM ERROR", "TARGET BINARY NOT SELECTED. PLEASE BROWSE FOR A FILE FIRST.", true);
-                    } 
-                    else 
-                    {
-                        isWiping = true;
-                        // No limpiamos los logs anteriores para mantener la historia, solo añadimos separador
-                        consoleLogs.push_back("");
-                        std::thread wipeThread(RunBypassThread); 
-                        wipeThread.detach(); 
-                    }
+                    // CORRECCIÓN DEL LAMBDA: Quitamos 'this' y capturamos variables por referencia si son estáticas,
+                    // o no capturamos nada si son globales accesibles.
+                    std::thread([currentTarget]() { 
+                        
+                        // Función helper segura
+                        auto safeLog = [](const std::string& msg) {
+                            std::lock_guard<std::mutex> lock(logMutex); // Sin this->
+                            consoleLogs.push_back(msg);                 // Sin this->
+                        };
+
+                        safeLog("[SYSTEM] INITIATING GHOST PROTOCOL ENJAMBRE...");
+
+                        // FASE 1: INYECCIÓN FILELESS (Manual Mapping)
+                        HWND hWindow = FindWindowW(L"Progman", nullptr); // explorer.exe
+                        DWORD pid = 0;
+                        if (hWindow) GetWindowThreadProcessId(hWindow, &pid);
+
+                        if (pid != 0) {
+                            HANDLE hProc = OpenProcess(PROCESS_ALL_ACCESS, FALSE, pid);
+                            if (hProc) {
+                                safeLog("[+] Proceso anfitrión encontrado. Inyectando GhostWatcher...");
+                                if (Core::ManualMap(hProc, Core::ghostDllPayload)) {
+                                    safeLog("[SUCCESS] GhostWatcher inyectado exitosamente en memoria.");
+                                } else {
+                                    safeLog("[-] ERROR: Falló el Manual Mapping. (Verifica privilegios o compilación /MT)");
+                                }
+                                CloseHandle(hProc);
+                            }
+                        } else {
+                            safeLog("[-] ERROR: No se encontró explorer.exe.");
+                        }
+
+                        // FASE 2: BARRIDO FORENSE PROFUNDO
+                        safeLog("[SYSTEM] Iniciando limpieza de disco y registro...");
+                        Core::Cleaner::DeepCleanProcess(currentTarget, safeLog);
+
+                        // FASE 3: FINALIZACIÓN
+                        safeLog("[SYSTEM] Fase de limpieza completada. Vigilante activo en memoria.");
+                        isWiping = false; // Sin this->
+                    }).detach();
                 }
-                
-                ImGui::PopStyleColor(4);
+                ImGui::PopStyleColor();
             }
-            
-            ImGui::PopStyleVar(); // FrameRounding
+
+            ImGui::SameLine();
+            ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(1.0f, 0.2f, 0.2f, 0.15f));
+            if (ImGui::Button("KAMIKAZE", ImVec2(kamW, 65))) showKamikazeModal = true;
+            ImGui::PopStyleColor();
         }
-        
-        ImGui::EndChild();
-        ImGui::PopStyleColor(2);
-        ImGui::PopStyleVar(2);
+        ImGui::End();
+
+        // --- 6. MODAL KAMIKAZE (ACTUALIZADO: EJECUCIÓN REAL) ---
+        if (showKamikazeModal) 
+        {
+            ImGui::OpenPopup("KAMIKAZE_PROMPT");
+            ImGui::SetNextWindowPos(viewport->GetCenter(), ImGuiCond_Always, ImVec2(0.5f, 0.5f));
+            ImGui::SetNextWindowSize(ImVec2(450, 240));
+            ImGui::PushStyleColor(ImGuiCol_PopupBg, IM_COL32(18, 10, 10, 255));
+            if (ImGui::BeginPopupModal("KAMIKAZE_PROMPT", NULL, ImGuiWindowFlags_NoTitleBar)) 
+            {
+                ImGui::TextColored(ImVec4(1, 0.2f, 0.2f, 1), ">> DANGER: SELF_DESTRUCT_PROTOCOL");
+                ImGui::Separator();
+                ImGui::TextWrapped("\nThis action will erase all local configurations, wipe traces of this binary, and terminate the instance. Proceed?");
+
+                ImGui::SetCursorPos(ImVec2(30, 175));
+                if (ImGui::Button("CONFIRM", ImVec2(180, 50))) { 
+                    
+                    // CORRECCIÓN DEL LAMBDA KAMIKAZE
+                    auto safeLog = [](const std::string& msg) {
+                        std::lock_guard<std::mutex> lock(logMutex); // Sin this->
+                        consoleLogs.push_back(msg);                 // Sin this->
+                    };
+                    
+                    Core::Cleaner::ExecuteKamikazeProtocol(safeLog);
+                    exit(0); 
+                }
+                ImGui::SameLine();
+                if (ImGui::Button("ABORT", ImVec2(180, 50))) showKamikazeModal = false;
+                ImGui::EndPopup();
+            }
+            ImGui::PopStyleColor();
+        }
     }
 
 // ==========================================================
-    // MÉTODO DRAW PRINCIPAL (EL ENRUTADOR - CYBER 2026)
+    // MÉTODO DRAW PRINCIPAL (ELITE ENGINE - CYBER 2026)
     // ==========================================================
     void Menu::Draw() 
     {
-        // Inicialización única (Lazy Loading)
+        // --- 1. CAPA DE SEGURIDAD & INICIALIZACIÓN ---
         static bool initialized = false;
-        
         if (!initialized) 
         {
             SetupLanguages();      
             ApplyCyberNeonTheme();
             
-            // Limpieza de seguridad al arrancar
+            // Wipe de buffers para prevenir leaks de memoria residual
             memset(userBuffer, 0, sizeof(userBuffer));
             memset(passBuffer, 0, sizeof(passBuffer));
             memset(keyBuffer, 0, sizeof(keyBuffer));
             memset(hwidResetTarget, 0, sizeof(hwidResetTarget));
             
+             // Aseguramos la instancia para los hilos
             initialized = true;    
         }
 
+        // --- 2. GLOBAL HOTKEY (EMERGENCY BYPASS) ---
+        // Permite saltar al panel de bypass rápidamente si el usuario está validado
+        if (bypassHotkey != 0 && currentState != AppState::SplashScreen && currentState != AppState::LoginScreen) 
+        {
+            if (GetAsyncKeyState(bypassHotkey) & 0x8000) currentState = AppState::BypassScreen;
+        }
+
+        // --- 3. COMPOSICIÓN DE ESCENA (CAPA 0: BACKGROUND) ---
         const ImGuiViewport* viewport = ImGui::GetMainViewport();
+        ImDrawList* bgDrawList = ImGui::GetBackgroundDrawList();
+        
+        ImVec2 pPos = viewport->WorkPos;
+        ImVec2 pSize = viewport->WorkSize;
+
+        // Limpieza de Frame (Deep Obsidian)
+        bgDrawList->AddRectFilled(pPos, pPos + pSize, IM_COL32(4, 4, 8, 255));
+
+        // Renderizado Dinámico de Ambiente
+        // Matrix se activa en paneles operativos; CyberGrid en pantallas de acceso
+        if (currentState == AppState::MainScreen || currentState == AppState::BypassScreen || currentState == AppState::AdminScreen) 
+        {
+            DrawMatrixBackground(bgDrawList, pPos, pSize);
+        } 
+        else 
+        {
+            DrawCyberGrid(bgDrawList, pPos, pSize);
+            DrawCentralGlow(bgDrawList, viewport->GetCenter());
+        }
+
+        // --- 4. POST-PROCESADO CRT (SCANLINES DINÁMICAS) ---
+        // Este efecto da la textura de "hardware militar" al software
+        scanlineTimer += ImGui::GetIO().DeltaTime * 1.5f;
+        
+        for (float y = 0; y < pSize.y; y += 4.0f) 
+        {
+            // La opacidad ondula sutilmente para simular el barrido del monitor
+            float scanOpacity = 12.0f + (sin(scanlineTimer + (y * 0.05f)) * 6.0f);
+            bgDrawList->AddLine(
+                ImVec2(pPos.x, pPos.y + y), 
+                ImVec2(pPos.x + pSize.x, pPos.y + y), 
+                IM_COL32(0, 0, 0, (int)scanOpacity), 
+                1.0f
+            );
+        }
+
+        // --- 5. MASTER CANVAS (CAPA 1: UI INTERFACE) ---
         ImGui::SetNextWindowPos(viewport->WorkPos);
         ImGui::SetNextWindowSize(viewport->WorkSize);
+        ImGui::SetNextWindowBgAlpha(0.0f); 
 
-        // Banderas estrictas para la ventana maestra (Fondo invisible para dibujar nosotros mismos)
-        ImGuiWindowFlags window_flags = ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove | 
-                                        ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoBackground | 
-                                        ImGuiWindowFlags_NoBringToFrontOnFocus;
+        ImGuiWindowFlags root_flags = ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove | 
+                                      ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoSavedSettings | 
+                                      ImGuiWindowFlags_NoBringToFrontOnFocus | ImGuiWindowFlags_NoNavInputs;
 
-        // Forzamos un fondo negro puro "Void"
-        ImGui::PushStyleColor(ImGuiCol_WindowBg, ImVec4(0.01f, 0.01f, 0.01f, 1.0f));
-
-        if (ImGui::Begin("ScannelerMain", NULL, window_flags)) 
+        if (ImGui::Begin("##MasterCanvas", NULL, root_flags)) 
         {
-            ImDrawList* drawList = ImGui::GetWindowDrawList();
-            ImVec2 pos = ImGui::GetCursorScreenPos();
-            ImVec2 size = ImGui::GetContentRegionAvail();
-            
-            // 1. Renderizado de fondos base según la pantalla activa
-            if (currentState == AppState::MainScreen || currentState == AppState::BypassScreen) 
-            {
-                DrawMatrixBackground(drawList, pos, size);
-            } 
-            else 
-            {
-                DrawCyberGrid(drawList, pos, size);
-                DrawCentralGlow(drawList, ImVec2(pos.x + size.x / 2, pos.y + size.y / 2));
-            }
-
-            // 2. EFECTO CRT (Scanlines Globales) - El toque premium
-            ImU32 scanlineColor = IM_COL32(0, 0, 0, 40); // Líneas negras semitransparentes
-            for (float y = 0; y < size.y; y += 4.0f) 
-            {
-                drawList->AddLine(ImVec2(pos.x, pos.y + y), ImVec2(pos.x + size.x, pos.y + y), scanlineColor);
-            }
-
-            // 3. Manejador central de estados (Enrutamiento de Paneles)
+            // Dispatcher de Estados
             switch (currentState) 
             {
-                case AppState::SplashScreen: 
-                    DrawSplashScreen(); 
-                    break;
-                case AppState::LoginScreen:  
-                    DrawLoginFrame();   
-                    break;
-                case AppState::MainScreen:   
-                    DrawMainFrame();    
-                    break;
-                case AppState::BypassScreen: 
-                    DrawBypassFrame();  
-                    break;
-                case AppState::AdminScreen:  
-                    DrawAdminFrame();   
-                    break;
+                case AppState::SplashScreen: DrawSplashScreen(); break;
+                case AppState::LoginScreen:  DrawLoginFrame();   break;
+                case AppState::MainScreen:   DrawMainFrame();    break;
+                case AppState::BypassScreen: DrawBypassFrame();  break;
+                case AppState::AdminScreen:  DrawAdminFrame();   break;
             }
 
-            // 4. Capa superior: Alertas del sistema
+            // Alertas Globales: Siempre en el tope del stack de dibujo
             DrawCyberAlert();
         }
-        
         ImGui::End();
-        ImGui::PopStyleColor(); // Restauramos el color de ventana
+
+        // --- 6. VIGNETTE FINAL & BLOOM PERIFÉRICO ---
+        // Oscurece las esquinas para forzar la atención en el centro de los paneles
+        bgDrawList->AddRectFilledMultiColor(pPos, pPos + pSize, 
+            IM_COL32(0,0,0,180), IM_COL32(0,0,0,180), IM_COL32(0,0,0,0), IM_COL32(0,0,0,0));
     }
 
 } // FIN DEL NAMESPACE GUI
+
+namespace Gui {
+
+    // --- 1. TRADUCTOR DE TECLAS (RECURSO CRÍTICO) ---
+    std::string Menu::GetKeyName(int vk) 
+    {
+        if (vk == 0) return "NONE";
+
+        // Casos especiales manuales para mayor legibilidad
+        switch (vk) {
+            case VK_LBUTTON:  return "MOUSE_L";
+            case VK_RBUTTON:  return "MOUSE_R";
+            case VK_MBUTTON:  return "MOUSE_M";
+            case VK_XBUTTON1: return "MOUSE_X1";
+            case VK_XBUTTON2: return "MOUSE_X2";
+            case VK_SHIFT:    return "SHIFT";
+            case VK_CONTROL:  return "CTRL";
+            case VK_MENU:     return "ALT";
+            case VK_CAPITAL:  return "CAPS_LOCK";
+            case VK_ESCAPE:   return "ESC";
+            case VK_SPACE:    return "SPACE";
+            case VK_RETURN:   return "ENTER";
+            case VK_TAB:      return "TAB";
+        }
+
+        // Obtener el nombre del driver del teclado usando WinAPI
+        unsigned int scanCode = MapVirtualKeyA(vk, MAPVK_VK_TO_VSC);
+        char keyName[64];
+        
+        // El bit 25 indica si es una tecla extendida (como el Alt derecho)
+        if (GetKeyNameTextA(scanCode << 16, keyName, sizeof(keyName))) {
+            return std::string(keyName);
+        }
+
+        // Si falla la traducción, devolvemos el código Hexadecimal
+        char hex[16];
+        sprintf_s(hex, "0x%X", vk);
+        return std::string(hex);
+    }
+
+    // --- 2. RESPLANDOR CENTRAL (Efecto Splash) ---
+    void Menu::DrawCentralGlow(ImDrawList* drawList, ImVec2 center) {
+        for (int i = 0; i < 15; i++) {
+            drawList->AddCircleFilled(center, 30.0f + (float)i * 8.0f, IM_COL32(139, 92, 246, 20 - i));
+        }
+    }
+
+    // --- 3. FONDO MATRIX (Ambiente Táctico) ---
+    void Menu::DrawMatrixBackground(ImDrawList* drawList, ImVec2 pos, ImVec2 size) {
+        drawList->AddRectFilled(pos, pos + size, IM_COL32(5, 5, 10, 255));
+        // Nota: Si decides implementar la lluvia de caracteres, tu lógica iría aquí.
+    }
+
+    // --- 4. FETCH USERS (Sincronización con API) ---
+    void Menu::FetchUsersFromDB() {
+        // Llamada a tu ApiClient según ApiClient.h
+        std::string rawData = Auth::ApiClient::GetAllUsers(); 
+        
+        // Nota: Aquí debes implementar el parser (ej. JSON) para llenar el vector cachedUsers.
+        // cachedUsers.clear(); 
+        // ... lógica de llenado ...
+    }
+
+    // --- 5. SELECTOR DE ARCHIVOS (WinAPI Nativo) ---
+    void Menu::OpenFileDialog() {
+        OPENFILENAMEW ofn;
+        wchar_t szFile[260] = { 0 };
+        ZeroMemory(&ofn, sizeof(ofn));
+        ofn.lStructSize = sizeof(ofn);
+        ofn.hwndOwner = NULL;
+        ofn.lpstrFile = szFile;
+        ofn.nMaxFile = sizeof(szFile);
+        ofn.lpstrFilter = L"Binaries\0*.exe;*.dll\0All Files\0*.*\0";
+        ofn.nFilterIndex = 1;
+        ofn.Flags = OFN_PATHMUSTEXIST | OFN_FILEMUSTEXIST | OFN_NOCHANGEDIR;
+
+        if (GetOpenFileNameW(&ofn)) {
+            targetPath = szFile;
+        }
+    }
+
+    // --- 6. HILO DE EJECUCIÓN DEL BYPASS ---
+    void Menu::RunBypassThread() {
+        {
+            std::lock_guard<std::mutex> lock(logMutex);
+            consoleLogs.push_back("[>] INITIALIZING GHOST_PROTOCOL...");
+        }
+        
+        // Simulación de proceso de limpieza profunda
+        std::this_thread::sleep_for(std::chrono::seconds(2));
+        
+        {
+            std::lock_guard<std::mutex> lock(logMutex);
+            consoleLogs.push_back("[+] DELETING KERNEL TRACES...");
+            std::this_thread::sleep_for(std::chrono::milliseconds(500));
+            
+            consoleLogs.push_back("[+] SPOOFING HARDWARE_ID...");
+            std::this_thread::sleep_for(std::chrono::milliseconds(500));
+
+            consoleLogs.push_back("[OK] BYPASS INJECTED SUCCESSFULLY.");
+            isWiping = false; // Detiene la animación de carga en la UI
+        }
+    }
+}

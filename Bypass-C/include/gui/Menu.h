@@ -4,6 +4,7 @@
 #include <map>
 #include <mutex>
 #include <thread>
+#include <d3d11.h> // Necesario para la textura del logo
 #include <imgui.h>
 #include "../auth/ApiClient.h" 
 #include "../core/Cleaner.h"
@@ -19,7 +20,6 @@ namespace Gui {
         AdminScreen
     }; 
 
-    // Estructura para almacenar el caché de la DB
     struct UserNode {
         std::string username;
         std::string plan;
@@ -30,14 +30,26 @@ namespace Gui {
     public:
         Menu();
         static void Draw();
+        
+        // --- MÉTODO PARA CARGAR RECURSOS (PNG) ---
+        static bool LoadLogoTexture(ID3D11Device* device, const char* filename);
 
     private:
-        // --- TODAS LAS VARIABLES SON STATIC (Declaraciones puras sin '=') ---
-        // El valor real se asigna en main.cpp para evitar el error 'No current context'
-        
+        // --- INSTANCIA PARA THREADS ---
+        static Menu* _instance; 
+
+        // --- RECURSOS VISUALES ---
+        static ID3D11ShaderResourceView* logoTexture; // Tu Scanneler.png cargado aquí
+
+        // --- ESTADOS Y CONFIGURACIÓN ---
         static AppState currentState;
         static std::string currentLang;
         static std::map<std::string, std::map<std::string, std::string>> languages;
+
+        // --- ANIMACIONES CSS ---
+        static std::map<std::string, float> inputAnims; 
+        static float btnHoverLerp;                     
+        static float scanlineTimer;                    
 
         // Splash Screen
         static float splashProgress;
@@ -58,8 +70,9 @@ namespace Gui {
         static std::string loginStatus;
         static bool isLoginError;
         static bool isAdmin;
+        static bool isConnecting; 
 
-        // Variables de Redeem (Canjear)
+        // Variables de Redeem
         static char redeemKey[256];
         static char redeemUser[256];
         static char redeemPass[256];
@@ -69,9 +82,9 @@ namespace Gui {
         // Variables de Inicio (Main) / SYS CONFIG
         static bool showSettings;
         static bool deepScanEnabled;
-        static float matrixDrops[50];
+        static float matrixDrops[70]; 
         static bool isBindingHotkey;
-        static int bypassHotkey; // <--- AQUÍ ESTÁ LA NUEVA VARIABLE DEL HOTKEY
+        static int bypassHotkey;
 
         // Variables de Admin (Command Center)
         static std::vector<UserNode> cachedUsers;
@@ -90,25 +103,28 @@ namespace Gui {
         static bool isWiping;
         static bool showKamikazeModal;
 
-        // --- MÉTODOS DE DIBUJO ---
+        // --- MÉTODOS DE DIBUJO (UI ENGINE) ---
         static void SetupLanguages();
         static void ApplyCyberNeonTheme();
         static void DrawCyberGrid(ImDrawList* drawList, ImVec2 pos, ImVec2 size);
         static void DrawCentralGlow(ImDrawList* drawList, ImVec2 center);
         static void DrawMatrixBackground(ImDrawList* drawList, ImVec2 pos, ImVec2 size);
+        
         static void DrawSplashScreen();
         static void DrawLoginFrame();
         static void DrawMainFrame();
         static void DrawAdminFrame(); 
         static void DrawBypassFrame();
+        static void DrawSettingsFrame();
         static void DrawCyberAlert();
+
+        // --- UTILIDADES ---
         static void ShowAlert(const std::string& title, const std::string& msg, bool isError = false);
         static std::string GetText(const std::string& key);
         static std::string GetKeyName(int vkCode); 
-
-        // --- MÉTODOS AUXILIARES ---
         static void FetchUsersFromDB(); 
         static void OpenFileDialog();
-        static void RunBypassThread();
+        
+        static void RunBypassThread(); 
     };
 }

@@ -1164,7 +1164,7 @@ namespace Core {
         CleanShellExperience(logger);
         CleanClipboard(logger);
         ConfigurePagefileWipe(logger);
-        RestartExplorer(logger);
+        // RestartExplorer(logger);
         
         // 4. REGISTRO, TELEMETRÍA Y RASTROS PROFUNDOS
         CleanUserAssist(targetPath, logger);

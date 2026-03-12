@@ -4,62 +4,80 @@
 #include <imgui_impl_dx11.h>
 #include <d3d11.h>
 
-// Variables globales para DirectX
-static ID3D11Device* g_pd3dDevice = nullptr;
-static ID3D11DeviceContext* g_pd3dDeviceContext = nullptr;
-static IDXGISwapChain* g_pSwapChain = nullptr;
-static ID3D11RenderTargetView* g_mainRenderTargetView = nullptr;
-
-// Prototipos de funciones auxiliares de Windows
+// Prototipo externo para ImGui
 extern LRESULT ImGui_ImplWin32_WndProcHandler(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam);
 
 namespace Gui {
-    Render::Render() {}
-    Render::~Render() {}
+    Render::Render() {
+        hwnd = nullptr;
+        pd3dDevice = nullptr;
+        pd3dDeviceContext = nullptr;
+        pSwapChain = nullptr;
+        mainRenderTargetView = nullptr;
+    }
+
+    Render::~Render() {
+        CleanupDeviceD3D();
+    }
 
     bool Render::Initialize(const wchar_t* title) {
-        // 1. Crear la clase de ventana
+        // 1. Registro de Clase
         WNDCLASSEXW wc = { sizeof(wc), CS_CLASSDC, WndProc, 0L, 0L, GetModuleHandle(nullptr), nullptr, nullptr, nullptr, nullptr, L"ScannelerClass", nullptr };
         RegisterClassExW(&wc);
         
-        // 2. Crear la ventana física
-        HWND hwnd = CreateWindowW(wc.lpszClassName, title, WS_OVERLAPPEDWINDOW, 100, 100, 1280, 800, nullptr, nullptr, wc.hInstance, nullptr);
+        // 2. Creación de Ventana
+        hwnd = CreateWindowW(wc.lpszClassName, title, WS_OVERLAPPEDWINDOW, 100, 100, 1280, 800, nullptr, nullptr, wc.hInstance, nullptr);
+        if (!hwnd) return false;
 
-        // 3. Inicializar Direct3D 11
+        // 3. Inicializar Direct3D 11 usando los miembros de la clase (NO globales)
         DXGI_SWAP_CHAIN_DESC sd;
         ZeroMemory(&sd, sizeof(sd));
         sd.BufferCount = 2;
-        sd.BufferDesc.Width = 0;
-        sd.BufferDesc.Height = 0;
         sd.BufferDesc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
         sd.BufferUsage = DXGI_USAGE_RENDER_TARGET_OUTPUT;
         sd.OutputWindow = hwnd;
         sd.SampleDesc.Count = 1;
         sd.Windowed = TRUE;
+        sd.SwapEffect = DXGI_SWAP_EFFECT_DISCARD;
 
         D3D_FEATURE_LEVEL featureLevel;
-        D3D11CreateDeviceAndSwapChain(nullptr, D3D_DRIVER_TYPE_HARDWARE, nullptr, 0, nullptr, 0, D3D11_SDK_VERSION, &sd, &g_pSwapChain, &g_pd3dDevice, &featureLevel, &g_pd3dDeviceContext);
+        const D3D_FEATURE_LEVEL featureLevelArray[2] = { D3D_FEATURE_LEVEL_11_0, D3D_FEATURE_LEVEL_10_0, };
+        
+        // Usamos los punteros pd3dDevice de la clase Render.h
+        HRESULT hr = D3D11CreateDeviceAndSwapChain(nullptr, D3D_DRIVER_TYPE_HARDWARE, nullptr, 0, featureLevelArray, 2, D3D11_SDK_VERSION, &sd, &pSwapChain, &pd3dDevice, &featureLevel, &pd3dDeviceContext);
+        
+        if (FAILED(hr)) return false;
 
-        // Crear Render Target
-        ID3D11Texture2D* pBackBuffer;
-        g_pSwapChain->GetBuffer(0, IID_PPV_ARGS(&pBackBuffer));
-        g_pd3dDevice->CreateRenderTargetView(pBackBuffer, nullptr, &g_mainRenderTargetView);
-        pBackBuffer->Release();
+        // 4. Crear Render Target
+        CreateRenderTarget();
 
-        // --- CAMBIO CRÍTICO: INICIALIZAR IMGUI ANTES DE MOSTRAR LA VENTANA ---
+        // 5. Inicializar ImGui
         IMGUI_CHECKVERSION();
         ImGui::CreateContext();
-        ImGuiIO& io = ImGui::GetIO();
-        io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
-
+        ImGuiIO& io = ImGui::GetIO(); (void)io;
+        
         ImGui_ImplWin32_Init(hwnd);
-        ImGui_ImplDX11_Init(g_pd3dDevice, g_pd3dDeviceContext);
+        ImGui_ImplDX11_Init(pd3dDevice, pd3dDeviceContext);
 
-        // Ahora que ImGui está listo, mostramos la ventana
         ShowWindow(hwnd, SW_SHOWDEFAULT);
         UpdateWindow(hwnd);
 
         return true;
+    }
+
+    void Render::CreateRenderTarget() {
+        ID3D11Texture2D* pBackBuffer;
+        if (SUCCEEDED(pSwapChain->GetBuffer(0, IID_PPV_ARGS(&pBackBuffer)))) {
+            pd3dDevice->CreateRenderTargetView(pBackBuffer, nullptr, &mainRenderTargetView);
+            pBackBuffer->Release();
+        }
+    }
+
+    void Render::CleanupDeviceD3D() {
+        if (mainRenderTargetView) { mainRenderTargetView->Release(); mainRenderTargetView = nullptr; }
+        if (pSwapChain) { pSwapChain->Release(); pSwapChain = nullptr; }
+        if (pd3dDeviceContext) { pd3dDeviceContext->Release(); pd3dDeviceContext = nullptr; }
+        if (pd3dDevice) { pd3dDevice->Release(); pd3dDevice = nullptr; }
     }
 
     void Render::Run() {
@@ -73,47 +91,30 @@ namespace Gui {
             }
             if (done) break;
 
-            // Validación de seguridad: No renderizar si el contexto se perdió
-            if (ImGui::GetCurrentContext() == nullptr) continue;
-
-            // Iniciar frame de ImGui
+            // Iniciar frame
             ImGui_ImplDX11_NewFrame();
             ImGui_ImplWin32_NewFrame();
             ImGui::NewFrame();
 
-            // Dibujar Menú
+            // Dibujar
             Gui::Menu::Draw(); 
 
-            // Renderizado final
+            // Finalizar frame
             ImGui::Render();
-            const float clear_color_with_alpha[4] = { 0.05f, 0.05f, 0.05f, 1.0f };
-            g_pd3dDeviceContext->OMSetRenderTargets(1, &g_mainRenderTargetView, nullptr);
-            g_pd3dDeviceContext->ClearRenderTargetView(g_mainRenderTargetView, clear_color_with_alpha);
+            const float clear_color[4] = { 0.02f, 0.02f, 0.02f, 1.0f };
+            pd3dDeviceContext->OMSetRenderTargets(1, &mainRenderTargetView, nullptr);
+            pd3dDeviceContext->ClearRenderTargetView(mainRenderTargetView, clear_color);
             ImGui_ImplDX11_RenderDrawData(ImGui::GetDrawData());
 
-            g_pSwapChain->Present(1, 0); 
+            pSwapChain->Present(1, 0); 
         }
-
-        // Limpieza
-        ImGui_ImplDX11_Shutdown();
-        ImGui_ImplWin32_Shutdown();
-        ImGui::DestroyContext();
     }
 
-    // Función de manejo de mensajes corregida
     LRESULT CALLBACK Render::WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam) {
-        // PROTECCIÓN: Si el contexto no existe, no pasar mensajes a ImGui
-        if (ImGui::GetCurrentContext() != nullptr) {
-            if (ImGui_ImplWin32_WndProcHandler(hWnd, msg, wParam, lParam))
-                return true;
-        }
+        if (ImGui_ImplWin32_WndProcHandler(hWnd, msg, wParam, lParam))
+            return true;
 
         switch (msg) {
-            case WM_SIZE:
-                if (g_pd3dDevice != nullptr && wParam != SIZE_MINIMIZED) {
-                    // Aquí podrías redimensionar el render target si fuera necesario
-                }
-                return 0;
             case WM_SYSCOMMAND:
                 if ((wParam & 0xfff0) == SC_KEYMENU) return 0;
                 break;

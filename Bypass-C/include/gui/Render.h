@@ -1,7 +1,7 @@
 #pragma once
 #include <windows.h>
 #include <d3d11.h>
-#include "Menu.h" // Incluimos nuestra interfaz principal
+#include "Menu.h"
 
 namespace Gui {
     class Render {
@@ -9,30 +9,36 @@ namespace Gui {
         Render();
         ~Render();
 
-        // Funciones que llamamos desde main.cpp
+        // Inicializa la ventana y DirectX 11
         bool Initialize(LPCWSTR windowTitle);
+        
+        // Bucle principal de renderizado
         void Run();
+
+        // --- FUNCIÓN CRÍTICA PARA CARGAR EL LOGO ---
+        // Permite obtener el dispositivo D3D11 desde fuera de la clase
+        ID3D11Device* GetDevice() { return pd3dDevice; }
 
     private:
         HWND hwnd;
         WNDCLASSEXW wc;
         
-        // Instancia de nuestro menú (toda la lógica visual que hicimos antes)
+        // Instancia del menú con toda nuestra lógica de frames
         Menu mainMenu; 
 
-        // Punteros básicos de DirectX 11
+        // Punteros de la infraestructura de DirectX 11
         ID3D11Device* pd3dDevice;
         ID3D11DeviceContext* pd3dDeviceContext;
         IDXGISwapChain* pSwapChain;
         ID3D11RenderTargetView* mainRenderTargetView;
 
-        // Métodos internos de inicialización gráfica
+        // Métodos internos de gestión de recursos de video
         bool CreateDeviceD3D(HWND hWnd);
         void CleanupDeviceD3D();
         void CreateRenderTarget();
         void CleanupRenderTarget();
 
-        // Manejador de eventos de la ventana de Windows
+        // Procesador de mensajes de Windows (teclado, ratón, cerrar ventana)
         static LRESULT CALLBACK WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam);
     };
 }
